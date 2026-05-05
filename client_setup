@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RED=$'\033[31m'
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+BLUE=$'\033[34m'
+BOLD=$'\033[1m'
+RESET=$'\033[0m'
+
+info() { echo "${BLUE}==>${RESET} $*"; }
+ok() { echo "${GREEN}OK:${RESET} $*"; }
+warn() { echo "${YELLOW}WARN:${RESET} $*"; }
+err() { echo "${RED}ERROR:${RESET} $*" >&2; }
+
+CONFIG_DIR="$HOME/.opk"
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+
+info "Creating OPKSSH config directory"
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+ok "Config directory ready: $CONFIG_DIR"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  BACKUP="$CONFIG_FILE.backup.$(date +%Y%m%d-%H%M%S)"
+  warn "Existing config found. Backing it up to:"
+  echo "     $BACKUP"
+  cp "$CONFIG_FILE" "$BACKUP"
+fi
+
+info "Writing UGA ArchPass OPKSSH config"
+
+cat >"$CONFIG_FILE" <<'YAML'
+---
+default_provider: uga
+providers:
+  - alias: uga
+    issuer: https://login.microsoftonline.com/a8216c1e-4d63-4352-8c3b-50fa1f1475b1/v2.0
+    client_id: 7f331a0a-da1a-4e13-8df0-e9baba02ed86
+    scopes: openid profile email offline_access
+    access_type: offline
+    prompt: consent
+    redirect_uris:
+      - http://localhost:3000/login-callback
+      - http://localhost:10001/login-callback
+      - http://localhost:11110/login-callback
+YAML
+
+chmod 600 "$CONFIG_FILE"
+ok "Wrote config: $CONFIG_FILE"
+
+info "Checking for opkssh on PATH"
+
+if command -v opkssh >/dev/null 2>&1; then
+  OPKSSH_PATH="$(command -v opkssh)"
+  ok "Found opkssh: $OPKSSH_PATH"
+
+  echo
+  echo "${BOLD}${GREEN}Setup complete.${RESET}"
+  echo
+  echo "Next step:"
+  echo "  opkssh login uga"
+else
+  warn "opkssh was not found on your PATH."
+
+  echo
+  echo "${BOLD}Install OPKSSH first:${RESET}"
+  echo "  https://github.com/openpubkey/opkssh"
+  echo
+  echo "After installing, open a new terminal and run:"
+  echo "  opkssh login uga"
+  echo
+  echo "${YELLOW}Config was still created successfully.${RESET}"
+fi

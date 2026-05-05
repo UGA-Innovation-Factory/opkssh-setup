@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RED=$'\033[31m'
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+BLUE=$'\033[34m'
+BOLD=$'\033[1m'
+RESET=$'\033[0m'
+
+info() { echo "${BLUE}==>${RESET} $*"; }
+ok() { echo "${GREEN}OK:${RESET} $*"; }
+warn() { echo "${YELLOW}WARN:${RESET} $*"; }
+err() { echo "${RED}ERROR:${RESET} $*" >&2; }
+
+PROVIDERS_DIR="/etc/opk"
+PROVIDERS_FILE="/etc/opk/providers"
+
+UGA_ISSUER="https://login.microsoftonline.com/a8216c1e-4d63-4352-8c3b-50fa1f1475b1/v2.0"
+UGA_CLIENT_ID="7f331a0a-da1a-4e13-8df0-e9baba02ed86"
+UGA_TTL="12h"
+UGA_PROVIDER_LINE="${UGA_ISSUER} ${UGA_CLIENT_ID} ${UGA_TTL}"
+
+INSTALL_URL="https://raw.githubusercontent.com/openpubkey/opkssh/main/scripts/install-linux.sh"
+
+PROVIDERS_ONLY=false
+
+usage() {
+  echo "${BOLD}Usage:${RESET} $0 [options]"
+  echo
+  echo "Options:"
+  echo "  -p, --providers-only   Only install/update providers file (skip opkssh install)"
+  echo "  -h, --help             Show this help message"
+  echo
+  echo "Examples:"
+  echo "  sudo $0"
+  echo "  sudo $0 --providers-only"
+}
+
+# --- Parse args ---
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -p | --providers-only)
+    PROVIDERS_ONLY=true
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    err "Unknown argument: $1"
+    echo
+    usage
+    exit 1
+    ;;
+  esac
+done
+
+if [[ "${EUID}" -ne 0 ]]; then
+  err "This script must be run as root."
+  echo "Try:"
+  echo "  sudo $0"
+  exit 1
+fi
+
+# --- Install OPKSSH server unless providers-only ---
+if [[ "$PROVIDERS_ONLY" == false ]]; then
+  info "Checking platform"
+
+  OS="$(uname -s)"
+  ARCH="$(uname -m)"
+
+  if [[ "$OS" != "Linux" ]]; then
+    err "This script only auto-installs OPKSSH SERVER on Linux."
+    echo
+    echo "${BOLD}Install the OPKSSH SERVER version manually from:${RESET}"
+    echo "  https://github.com/openpubkey/opkssh"
+    exit 1
+  fi
+
+  if [[ "$ARCH" != "x86_64" ]]; then
+    warn "Detected architecture: $ARCH (auto-install only supports x86_64)"
+    echo
+    echo "${BOLD}Install the OPKSSH SERVER version manually from:${RESET}"
+    echo "  https://github.com/openpubkey/opkssh"
+    exit 1
+  fi
+
+  ok "Detected Linux x86_64"
+
+  if command -v opkssh >/dev/null 2>&1; then
+    ok "opkssh already exists at: $(command -v opkssh)"
+  else
+    info "Installing OPKSSH SERVER version to /usr/local/bin/opkssh"
+
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL "$INSTALL_URL" | bash
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO- "$INSTALL_URL" | bash
+    else
+      err "Neither curl nor wget is installed."
+      echo
+      echo "${BOLD}Install OPKSSH SERVER manually:${RESET}"
+      echo "  https://github.com/openpubkey/opkssh"
+      exit 1
+    fi
+
+    if command -v opkssh >/dev/null 2>&1; then
+      ok "Installed opkssh at: $(command -v opkssh)"
+    else
+      err "Installer ran, but opkssh still not found."
+      exit 1
+    fi
+  fi
+else
+  warn "Running in providers-only mode. Skipping OPKSSH installation checks."
+fi
+
+# --- Providers setup (always runs) ---
+info "Setting up providers file"
+
+mkdir -p "$PROVIDERS_DIR"
+chmod 755 "$PROVIDERS_DIR"
+
+if [[ -f "$PROVIDERS_FILE" ]]; then
+  BACKUP="${PROVIDERS_FILE}.backup.$(date +%Y%m%d-%H%M%S)"
+  info "Backing up existing providers file"
+  cp "$PROVIDERS_FILE" "$BACKUP"
+  ok "Backup created: $BACKUP"
+else
+  info "Creating providers file"
+  touch "$PROVIDERS_FILE"
+fi
+
+chmod 640 "$PROVIDERS_FILE"
+
+info "Checking for existing provider entry"
+
+if grep -Fq "$UGA_ISSUER" "$PROVIDERS_FILE"; then
+  warn "Provider already exists:"
+  grep -F "$UGA_ISSUER" "$PROVIDERS_FILE" || true
+else
+  echo "$UGA_PROVIDER_LINE" >>"$PROVIDERS_FILE"
+  ok "Added provider:"
+  echo "    $UGA_PROVIDER_LINE"
+fi
+
+echo
+echo "${BOLD}${GREEN}Done.${RESET}"
+echo
+echo "Providers file:"
+echo "  $PROVIDERS_FILE"
+echo
+echo "Mode:"
+if [[ "$PROVIDERS_ONLY" == true ]]; then
+  echo "  providers-only"
+else
+  echo "  full server setup"
+fi

@@ -14,18 +14,21 @@ import urllib.request
 
 DEFAULT_CONFIG = "/etc/opk/gitea-opkssh.env"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+AUTHORIZED_KEYS_RE = re.compile(
+    r"^(?:(?P<options>\S+)\s+)?(?P<key_type>(?:ssh|ecdsa|sk)-\S+)\s+(?P<key_body>\S+)(?P<comment>.*)$"
+)
 
 
 def load_env(path):
     config = {
-        "GITEA_URL": "http://127.0.0.1:3000",
+        "GITEA_URL": "http://127.0.0.1:80",
         "GITEA_TOKEN_FILE": "/etc/opk/gitea-token",
         "GITEA_BINARY": "/usr/local/bin/gitea",
         "GITEA_CONFIG": "/etc/gitea/app.ini",
         "GITEA_WORK_PATH": "",
         "GITEA_RUN_USER": "git",
         "GITEA_KEY_TITLE_PREFIX": "opkssh-oidc",
-        "GITEA_REQUIRE_VERIFIED_EMAIL": "true",
+        "GITEA_REQUIRE_VERIFIED_EMAIL": "false",
         "GITEA_SYNTHETIC_KEY_READ_ONLY": "false",
         "OPKSSH_BINARY": "/usr/local/bin/opkssh",
     }
@@ -257,18 +260,9 @@ def authorized_keys_command(config, key_id):
 
 def emit_gitea_command_for_opkssh_line(config, opkssh_line, key_id):
     command = authorized_keys_command(config, key_id)
-    fields = shlex.split(opkssh_line, comments=False, posix=True)
-
-    if len(fields) < 2:
+    match = AUTHORIZED_KEYS_RE.match(opkssh_line)
+    if not match:
         raise RuntimeError("opkssh verify did not emit a usable authorized_keys line")
-
-    key_index = 0
-    for index, field in enumerate(fields):
-        if field.startswith("ssh-") or field.startswith("ecdsa-") or field.startswith("sk-"):
-            key_index = index
-            break
-    else:
-        raise RuntimeError("opkssh verify output did not include an SSH key type")
 
     forced_options = [
         f'command="{command}"',
@@ -278,11 +272,14 @@ def emit_gitea_command_for_opkssh_line(config, opkssh_line, key_id):
         "no-pty",
         "no-user-rc",
     ]
-    existing_options = fields[:key_index]
-    key_fields = fields[key_index:]
-    options = ",".join(forced_options + existing_options)
+    existing_options = match.group("options")
+    if existing_options:
+        forced_options.append(existing_options)
 
-    print(f"{options} {' '.join(key_fields)}")
+    options = ",".join(forced_options)
+    key_fields = f"{match.group('key_type')} {match.group('key_body')}{match.group('comment')}"
+
+    print(f"{options} {key_fields}")
 
 
 def main():

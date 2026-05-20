@@ -57,6 +57,11 @@ To install a different internal host pattern in `~/.ssh/config`:
 The generated SSH config uses OPKSSH's default generated key,
 `~/.ssh/id_ecdsa`, with `IdentitiesOnly yes`.
 
+The OPKSSH settings are applied only to the local SSH alias, such as `factory`,
+not to the raw hostname `factory.uga.edu`. This keeps normal Gitea usage like
+`ssh git@factory.uga.edu` or Git remotes using `git@factory.uga.edu:...`
+from inheriting the bastion-only identity and password settings.
+
 ## Bastion Setup
 
 On `factory.uga.edu` or a dedicated SSH bastion host:

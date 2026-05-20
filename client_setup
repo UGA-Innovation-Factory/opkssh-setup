@@ -155,7 +155,7 @@ if [[ "$UPDATE_SSH_CONFIG" == true ]]; then
       echo
     fi
     echo "$START_MARKER"
-    echo "Host $FACTORY_ALIAS $FACTORY_HOST"
+    echo "Host $FACTORY_ALIAS"
     echo "  HostName $FACTORY_HOST"
     echo "  User $FACTORY_USER"
     echo "  IdentitiesOnly yes"

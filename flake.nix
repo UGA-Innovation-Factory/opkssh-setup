@@ -36,6 +36,7 @@
             install -Dm644 README.md $out/share/doc/uga-living-labs-opkssh/README.md
             install -Dm644 docs/architecture.md $out/share/doc/uga-living-labs-opkssh/architecture.md
             install -Dm644 examples/entra_groups.tsv $out/share/uga-living-labs-opkssh/examples/entra_groups.tsv
+            install -Dm644 examples/entra_roles.tsv $out/share/uga-living-labs-opkssh/examples/entra_roles.tsv
             install -Dm644 examples/email_users.tsv $out/share/uga-living-labs-opkssh/examples/email_users.tsv
 
             runHook postInstall

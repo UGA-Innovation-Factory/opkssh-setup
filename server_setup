@@ -27,10 +27,12 @@ INSTALL_URL="https://raw.githubusercontent.com/openpubkey/opkssh/main/scripts/in
 PROVIDERS_ONLY=false
 CONFIGURE_JUMP_HOST=false
 GROUP_MAP=""
+ROLE_MAP=""
 EMAIL_MAP=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTH_SYNC_SCRIPT="$SCRIPT_DIR/scripts/living_labs_auth_sync"
 SSHD_CONFIG_DIR="/etc/ssh/sshd_config.d"
+SSHD_OPKSSH_CONFIG="$SSHD_CONFIG_DIR/50-opkssh.conf"
 SSHD_JUMP_CONFIG="$SSHD_CONFIG_DIR/60-uga-living-labs-jump.conf"
 NO_SHELL_SOURCE_SCRIPT="$SCRIPT_DIR/scripts/factory_ssh_no_shell"
 NO_SHELL_INSTALL_PATH="/usr/local/libexec/uga-living-labs/factory-ssh-no-shell"
@@ -40,12 +42,14 @@ FACTORY_USER="factory"
 FACTORY_ACCESS_GROUP="factory-ssh-access"
 INSTALL_NO_SHELL_COMMAND=true
 CREATE_FACTORY_USER=true
+CONFIGURE_SSHD_OPKSSH=true
 
 usage() {
   echo "${BOLD}Usage:${RESET} $0 [options]"
   echo
   echo "Options:"
   echo "  -p, --providers-only       Only install/update providers file (skip opkssh install)"
+  echo "  --no-sshd-opkssh           Do not configure sshd AuthorizedKeysCommand"
   echo "  --configure-jump-host      Add sshd_config.d snippet for ssh -J forwarding"
   echo "  --factory-user USER        Shared bastion username (default: factory)"
   echo "  --factory-access-group ID  Entra group/role claim for factory user (default: factory-ssh-access)"
@@ -54,6 +58,7 @@ usage() {
   echo "  --permit-open LIST         PermitOpen value for jump users (default: any)"
   echo "  --no-no-shell-command      Do not install ForceCommand no-shell message"
   echo "  --group-map FILE           Apply Entra group-to-Linux-user auth map"
+  echo "  --role-map FILE            Apply OIDC role-to-Linux-user auth map"
   echo "  --email-map FILE           Apply email/sub-to-Linux-user auth map"
   echo "  -h, --help                 Show this help message"
   echo
@@ -68,6 +73,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
   -p | --providers-only)
     PROVIDERS_ONLY=true
+    shift
+    ;;
+  --no-sshd-opkssh)
+    CONFIGURE_SSHD_OPKSSH=false
     shift
     ;;
   --configure-jump-host)
@@ -101,6 +110,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --group-map)
     GROUP_MAP="${2:-}"
+    shift 2
+    ;;
+  --role-map)
+    ROLE_MAP="${2:-}"
     shift 2
     ;;
   --email-map)
@@ -180,6 +193,50 @@ else
   warn "Running in providers-only mode. Skipping OPKSSH installation checks."
 fi
 
+# --- sshd OPKSSH verifier setup ---
+if [[ "$CONFIGURE_SSHD_OPKSSH" == true ]]; then
+  info "Configuring sshd OPKSSH verifier"
+
+  if ! getent group opksshuser >/dev/null 2>&1; then
+    if command -v groupadd >/dev/null 2>&1; then
+      groupadd --system opksshuser
+      ok "Created group: opksshuser"
+    else
+      err "groupadd was not found. Create group 'opksshuser' manually or rerun with --no-sshd-opkssh."
+      exit 1
+    fi
+  fi
+
+  if ! id opksshuser >/dev/null 2>&1; then
+    if command -v useradd >/dev/null 2>&1; then
+      useradd --system --no-create-home --shell /usr/sbin/nologin --gid opksshuser opksshuser
+      ok "Created user: opksshuser"
+    else
+      err "useradd was not found. Create user 'opksshuser' manually or rerun with --no-sshd-opkssh."
+      exit 1
+    fi
+  fi
+
+  if command -v opkssh >/dev/null 2>&1; then
+    OPKSSH_PATH="$(command -v opkssh)"
+  else
+    err "opkssh is not on PATH; cannot configure AuthorizedKeysCommand."
+    exit 1
+  fi
+
+  install -d -m 755 "$SSHD_CONFIG_DIR"
+
+  cat >"$SSHD_OPKSSH_CONFIG" <<EOF
+# Managed by UGA Manufacturing Living Labs OPKSSH setup.
+PubkeyAuthentication yes
+AuthorizedKeysCommand $OPKSSH_PATH verify %u %k %t
+AuthorizedKeysCommandUser opksshuser
+EOF
+
+  chmod 644 "$SSHD_OPKSSH_CONFIG"
+  ok "Wrote $SSHD_OPKSSH_CONFIG"
+fi
+
 # --- Providers setup (always runs) ---
 info "Setting up providers file"
 
@@ -215,7 +272,7 @@ else
   echo "    $UGA_PROVIDER_LINE"
 fi
 
-if [[ -n "$GROUP_MAP" || -n "$EMAIL_MAP" ]]; then
+if [[ -n "$GROUP_MAP" || -n "$ROLE_MAP" || -n "$EMAIL_MAP" ]]; then
   info "Applying Living Labs OPKSSH auth maps"
 
   if [[ ! -x "$AUTH_SYNC_SCRIPT" ]]; then
@@ -239,6 +296,9 @@ if [[ -n "$GROUP_MAP" || -n "$EMAIL_MAP" ]]; then
   if [[ -n "$GROUP_MAP" ]]; then
     AUTH_SYNC_ARGS+=(--group-map "$GROUP_MAP")
   fi
+  if [[ -n "$ROLE_MAP" ]]; then
+    AUTH_SYNC_ARGS+=(--role-map "$ROLE_MAP")
+  fi
   if [[ -n "$EMAIL_MAP" ]]; then
     AUTH_SYNC_ARGS+=(--email-map "$EMAIL_MAP")
   fi
@@ -246,7 +306,7 @@ if [[ -n "$GROUP_MAP" || -n "$EMAIL_MAP" ]]; then
   "$AUTH_SYNC_SCRIPT" "${AUTH_SYNC_ARGS[@]}"
 fi
 
-FACTORY_AUTH_LINE="${FACTORY_USER} oidc:groups:${FACTORY_ACCESS_GROUP} ${UGA_ISSUER}"
+FACTORY_AUTH_LINE="${FACTORY_USER} oidc:roles:${FACTORY_ACCESS_GROUP} ${UGA_ISSUER}"
 
 info "Ensuring factory shared-user authorization"
 
@@ -353,11 +413,37 @@ EOF
   fi
 fi
 
+if [[ "$CONFIGURE_SSHD_OPKSSH" == true && "$CONFIGURE_JUMP_HOST" == false ]]; then
+  if command -v sshd >/dev/null 2>&1; then
+    if sshd -t; then
+      ok "sshd configuration validates"
+      if command -v systemctl >/dev/null 2>&1; then
+        warn "Reload sshd when ready:"
+        echo "  sudo systemctl reload sshd"
+      else
+        warn "Reload sshd with your platform's service manager when ready."
+      fi
+    else
+      err "sshd configuration did not validate. Review $SSHD_OPKSSH_CONFIG before reloading sshd."
+      exit 1
+    fi
+  else
+    warn "sshd command not found; could not validate SSH configuration."
+  fi
+fi
+
 echo
 echo "${BOLD}${GREEN}Done.${RESET}"
 echo
 echo "Providers file:"
 echo "  $PROVIDERS_FILE"
+echo
+echo "sshd OPKSSH:"
+if [[ "$CONFIGURE_SSHD_OPKSSH" == true ]]; then
+  echo "  configured: $SSHD_OPKSSH_CONFIG"
+else
+  echo "  not configured"
+fi
 echo
 echo "Mode:"
 if [[ "$PROVIDERS_ONLY" == true ]]; then

@@ -67,10 +67,11 @@ sudo ./server_setup --configure-jump-host --group-map examples/entra_groups.tsv
 
 This configures the UGA Entra OPKSSH provider and writes an sshd snippet allowing
 the shared `factory` Linux principal to perform TCP forwarding for `ssh -J`.
-It also ensures this OPKSSH authorization exists:
+It also ensures this OPKSSH authorization exists, matching the Entra app-role
+claim emitted as `roles: ["factory-ssh-access"]`:
 
 ```text
-factory oidc:groups:factory-ssh-access https://login.microsoftonline.com/a8216c1e-4d63-4352-8c3b-50fa1f1475b1/v2.0
+factory oidc:roles:factory-ssh-access https://login.microsoftonline.com/a8216c1e-4d63-4352-8c3b-50fa1f1475b1/v2.0
 ```
 
 Direct shell sessions as `factory` are denied with a message:
@@ -153,7 +154,7 @@ The module lives at `services.uga-living-labs`. It can:
 - install the OPKSSH package when available in nixpkgs,
 - write `/etc/opk/providers`,
 - write `/etc/opk/auth_id` from Entra group and email mappings, including the
-  default `factory -> oidc:groups:factory-ssh-access` mapping,
+  default `factory -> oidc:roles:factory-ssh-access` mapping,
 - configure OpenSSH as a `ProxyJump` entry point,
 - configure `dnsmasq` for internal DNS and DHCP on the lab network,
 - open DNS/DHCP firewall ports on the configured internal interfaces.

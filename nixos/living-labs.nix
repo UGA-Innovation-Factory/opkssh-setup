@@ -8,11 +8,11 @@ let
 
   factoryAccessMappings = lib.optional cfg.opkssh.enableFactoryAccess {
     user = cfg.factoryUser;
-    group = cfg.factoryAccessGroup;
+    role = cfg.factoryAccessGroup;
     issuer = defaultIssuer;
   };
 
-  effectiveGroupMappings = factoryAccessMappings ++ cfg.opkssh.groupMappings;
+  effectiveRoleMappings = factoryAccessMappings ++ cfg.opkssh.roleMappings;
 
   factoryNoShellCommand = pkgs.writeShellScript "factory-ssh-no-shell" ''
     set -euo pipefail
@@ -34,6 +34,9 @@ EOF
   authGroupLine = entry:
     "${entry.user} oidc:groups:${entry.group} ${entry.issuer}";
 
+  authRoleLine = entry:
+    "${entry.user} oidc:roles:${entry.role} ${entry.issuer}";
+
   authEmailLine = entry:
     "${entry.user} ${entry.email} ${entry.issuer}";
 
@@ -45,7 +48,7 @@ EOF
   authIdText = ''
     # Managed by services.uga-living-labs.
     # principal identity issuer
-    ${lib.concatStringsSep "\n" ((map authGroupLine effectiveGroupMappings) ++ (map authEmailLine cfg.opkssh.emailMappings))}
+    ${lib.concatStringsSep "\n" ((map authRoleLine effectiveRoleMappings) ++ (map authGroupLine cfg.opkssh.groupMappings) ++ (map authEmailLine cfg.opkssh.emailMappings))}
   '';
 
   hostRecordLines =
@@ -71,7 +74,7 @@ EOF
     "local=/${cfg.internalNetwork.domain}/"
   ] ++ hostRecordLines ++ dhcpRangeLines ++ dhcpHostLines ++ lib.optional (cfg.internalNetwork.extraDnsmasqConfig != "") cfg.internalNetwork.extraDnsmasqConfig);
 
-  hasAuthMappings = cfg.opkssh.groupMappings != [ ] || cfg.opkssh.emailMappings != [ ];
+  hasAuthMappings = cfg.opkssh.roleMappings != [ ] || cfg.opkssh.groupMappings != [ ] || cfg.opkssh.emailMappings != [ ];
 
   jumpUsers = lib.concatStringsSep "," cfg.jumpHost.users;
 
@@ -94,7 +97,7 @@ in
     factoryAccessGroup = lib.mkOption {
       type = lib.types.str;
       default = "factory-ssh-access";
-      description = "Entra group or app-role claim allowed to assume the shared factory user.";
+      description = "Entra app-role claim allowed to assume the shared factory user.";
     };
 
     oidcSourceName = lib.mkOption {
@@ -173,6 +176,30 @@ in
         description = "Mappings from Entra groups to local Linux principals.";
       };
 
+      roleMappings = lib.mkOption {
+        type = lib.types.listOf (lib.types.submodule {
+          options = {
+            user = lib.mkOption {
+              type = lib.types.str;
+              description = "Local Linux principal.";
+            };
+
+            role = lib.mkOption {
+              type = lib.types.str;
+              description = "OIDC role claim value, such as an Entra app role.";
+            };
+
+            issuer = lib.mkOption {
+              type = lib.types.str;
+              default = ugaIssuer;
+              description = "OIDC issuer for this mapping.";
+            };
+          };
+        });
+        default = [ ];
+        description = "Mappings from OIDC role claims to local Linux principals.";
+      };
+
       emailMappings = lib.mkOption {
         type = lib.types.listOf (lib.types.submodule {
           options = {
@@ -200,7 +227,7 @@ in
       enableFactoryAccess = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Automatically map factoryAccessGroup to factoryUser in /etc/opk/auth_id.";
+        description = "Automatically map factoryAccessGroup to factoryUser as an oidc:roles entry in /etc/opk/auth_id.";
       };
     };
 

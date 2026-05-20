@@ -44,6 +44,7 @@ Authorization is separate. `/etc/opk/auth_id` maps a Linux principal to one of:
 - an OIDC email address,
 - an OIDC subject ID,
 - an OIDC group claim such as `oidc:groups:<group-id>`.
+- an OIDC role claim such as `oidc:roles:<role-name>`.
 
 For UGA shared users, prefer Entra group mappings. For private hosts or smaller
 collaborations, use explicit email or subject mappings.
@@ -57,7 +58,8 @@ DNS context, which is exactly what we want for private lab DNS.
 Keep jump access narrow:
 
 - use the shared `factory` Linux principal for bastion entry,
-- map the Entra `factory-ssh-access` group or app role to that principal,
+- map the Entra `factory-ssh-access` app role to that principal as
+  `oidc:roles:factory-ssh-access`,
 - set `AllowTcpForwarding yes` only for those principals,
 - disable TTY, X11, and agent forwarding for jump principals,
 - use `ForceCommand` so direct sessions receive a no-shell message,

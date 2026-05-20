@@ -1,0 +1,3 @@
+# linux_user oidc_role_value [issuer]
+# Entra app roles appear in the OIDC ID token roles claim.
+factory factory-ssh-access

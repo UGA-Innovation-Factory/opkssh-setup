@@ -16,17 +16,19 @@ err() { echo "${RED}ERROR:${RESET} $*" >&2; }
 UGA_ISSUER_DEFAULT="https://login.microsoftonline.com/a8216c1e-4d63-4352-8c3b-50fa1f1475b1/v2.0"
 AUTH_ID_FILE="/etc/opk/auth_id"
 GROUP_MAP=""
+ROLE_MAP=""
 EMAIL_MAP=""
 ISSUER="$UGA_ISSUER_DEFAULT"
 DRY_RUN=false
 
 usage() {
-  echo "${BOLD}Usage:${RESET} $0 --group-map FILE [--email-map FILE] [options]"
+  echo "${BOLD}Usage:${RESET} $0 [--group-map FILE] [--role-map FILE] [--email-map FILE] [options]"
   echo
   echo "Build /etc/opk/auth_id entries from Living Labs authorization maps."
   echo
   echo "Options:"
   echo "  --group-map FILE      TSV/space file: linux_user entra_group_id_or_name [issuer]"
+  echo "  --role-map FILE       TSV/space file: linux_user oidc_role_value [issuer]"
   echo "  --email-map FILE      TSV/space file: linux_user email_or_sub [issuer]"
   echo "  --issuer URI          Default issuer for entries without an issuer"
   echo "  --auth-id FILE        Destination auth_id file (default: /etc/opk/auth_id)"
@@ -40,6 +42,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
   --group-map)
     GROUP_MAP="${2:-}"
+    shift 2
+    ;;
+  --role-map)
+    ROLE_MAP="${2:-}"
     shift 2
     ;;
   --email-map)
@@ -71,14 +77,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$GROUP_MAP" && -z "$EMAIL_MAP" ]]; then
-  err "At least one of --group-map or --email-map is required."
+if [[ -z "$GROUP_MAP" && -z "$ROLE_MAP" && -z "$EMAIL_MAP" ]]; then
+  err "At least one of --group-map, --role-map, or --email-map is required."
   echo
   usage
   exit 1
 fi
 
-for map_file in "$GROUP_MAP" "$EMAIL_MAP"; do
+for map_file in "$GROUP_MAP" "$ROLE_MAP" "$EMAIL_MAP"; do
   if [[ -n "$map_file" && ! -f "$map_file" ]]; then
     err "Map file not found: $map_file"
     exit 1
@@ -130,6 +136,9 @@ append_map() {
     group)
       printf '%s oidc:groups:%s %s\n' "$principal" "$identity" "$entry_issuer"
       ;;
+    role)
+      printf '%s oidc:roles:%s %s\n' "$principal" "$identity" "$entry_issuer"
+      ;;
     email)
       printf '%s %s %s\n' "$principal" "$identity" "$entry_issuer"
       ;;
@@ -138,6 +147,7 @@ append_map() {
 }
 
 append_map group "$GROUP_MAP"
+append_map role "$ROLE_MAP"
 append_map email "$EMAIL_MAP"
 
 if [[ "$DRY_RUN" == true ]]; then

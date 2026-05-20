@@ -93,6 +93,24 @@ def run_opkssh_verify(config, principal, key_type, key, emit=False):
     return result.returncode == 0
 
 
+def opkssh_authorized_keys_line(config, principal, key_type, key):
+    result = subprocess.run(
+        [config["OPKSSH_BINARY"], "verify", principal, key, key_type],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return ""
+
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+
+    return ""
+
+
 def extract_cert_email(key_type, key):
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(f"{key_type} {key}\n")
@@ -237,18 +255,34 @@ def authorized_keys_command(config, key_id):
     return command.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def emit_opkssh_gitea_key(config, key_type, key, key_id):
+def emit_gitea_command_for_opkssh_line(config, opkssh_line, key_id):
     command = authorized_keys_command(config, key_id)
-    options = [
+    fields = shlex.split(opkssh_line, comments=False, posix=True)
+
+    if len(fields) < 2:
+        raise RuntimeError("opkssh verify did not emit a usable authorized_keys line")
+
+    key_index = 0
+    for index, field in enumerate(fields):
+        if field.startswith("ssh-") or field.startswith("ecdsa-") or field.startswith("sk-"):
+            key_index = index
+            break
+    else:
+        raise RuntimeError("opkssh verify output did not include an SSH key type")
+
+    forced_options = [
         f'command="{command}"',
         "no-port-forwarding",
         "no-X11-forwarding",
         "no-agent-forwarding",
         "no-pty",
         "no-user-rc",
-        "restrict",
     ]
-    print(f"{','.join(options)} {key_type} {key}")
+    existing_options = fields[:key_index]
+    key_fields = fields[key_index:]
+    options = ",".join(forced_options + existing_options)
+
+    print(f"{options} {' '.join(key_fields)}")
 
 
 def main():
@@ -270,12 +304,13 @@ def main():
             return 0
 
         try:
-            if not run_opkssh_verify(config, principal, args.key_type, args.key):
+            opkssh_line = opkssh_authorized_keys_line(config, principal, args.key_type, args.key)
+            if not opkssh_line:
                 return 0
             email = extract_cert_email(args.key_type, args.key)
             username = find_gitea_username(config, email)
             key_id = ensure_gitea_key(config, username, email)
-            emit_opkssh_gitea_key(config, args.key_type, args.key, key_id)
+            emit_gitea_command_for_opkssh_line(config, opkssh_line, key_id)
         except Exception as exc:
             print(f"gitea-opkssh: {exc}", file=sys.stderr)
             return 0

@@ -94,6 +94,11 @@ ClientAliveCountMax 20
 The generated client config sets:
 
 ```sshconfig
+PreferredAuthentications publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+BatchMode yes
 ServerAliveInterval 20
 ServerAliveCountMax 6
 ```

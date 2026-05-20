@@ -116,3 +116,11 @@ Git SSH account as the general jump account. Prefer one of these shapes:
 - keep Gitea's Git command restrictions separate from human shell or jump access.
 
 This avoids accidentally giving a Git-only SSH identity TCP-forwarding privileges.
+
+When Gitea and OPKSSH do share the same system sshd, use the Gitea bridge only
+as an `AuthorizedKeysCommand` verifier. It preserves normal static Gitea keys by
+delegating to `gitea keys` first, then accepts OPKSSH certificates for the `git`
+Unix user by dynamically matching the certificate email against Gitea's own user
+email API. The bridge emits a forced `gitea serv key-<id>` command, so Gitea
+still enforces repository authorization. It should not be used as a jump account
+and does not require hard-coded Gitea usernames.

@@ -26,6 +26,7 @@ INSTALL_URL="https://raw.githubusercontent.com/openpubkey/opkssh/main/scripts/in
 
 PROVIDERS_ONLY=false
 CONFIGURE_JUMP_HOST=false
+CONFIGURE_GITEA_OPKSSH=false
 GROUP_MAP=""
 ROLE_MAP=""
 EMAIL_MAP=""
@@ -36,6 +37,19 @@ SSHD_OPKSSH_CONFIG="$SSHD_CONFIG_DIR/50-opkssh.conf"
 SSHD_JUMP_CONFIG="$SSHD_CONFIG_DIR/60-uga-living-labs-jump.conf"
 NO_SHELL_SOURCE_SCRIPT="$SCRIPT_DIR/scripts/factory_ssh_no_shell"
 NO_SHELL_INSTALL_PATH="/usr/local/libexec/uga-living-labs/factory-ssh-no-shell"
+GITEA_BRIDGE_SOURCE_SCRIPT="$SCRIPT_DIR/scripts/gitea_opkssh_authorized_keys"
+GITEA_BRIDGE_INSTALL_PATH="/usr/local/libexec/uga-living-labs/gitea-opkssh-authorized-keys"
+GITEA_BRIDGE_CONFIG="/etc/opk/gitea-opkssh.env"
+GITEA_URL="http://127.0.0.1:3000"
+GITEA_TOKEN_FILE="/etc/opk/gitea-token"
+GITEA_BINARY=""
+GITEA_CONFIG="/etc/gitea/app.ini"
+GITEA_WORK_PATH=""
+GITEA_RUN_USER="git"
+GITEA_ACCESS_ROLE="factory-ssh-access"
+GITEA_ACCESS_ROLE_SET=false
+GITEA_REQUIRE_VERIFIED_EMAIL=true
+GITEA_SYNTHETIC_KEY_READ_ONLY=false
 JUMP_PRINCIPALS="factory"
 PERMIT_OPEN="any"
 FACTORY_USER="factory"
@@ -56,6 +70,16 @@ usage() {
   echo "  --factory-user USER        Shared bastion username (default: factory)"
   echo "  --factory-access-group ID  Entra group/role claim for factory user (default: factory-ssh-access)"
   echo "  --no-create-factory-user   Do not create the shared bastion Unix user"
+  echo "  --configure-gitea-opkssh   Enable dynamic OPKSSH-to-Gitea Git SSH auth bridge"
+  echo "  --gitea-url URL            Local Gitea base URL (default: http://127.0.0.1:3000)"
+  echo "  --gitea-token-file FILE    Gitea admin API token file (default: /etc/opk/gitea-token)"
+  echo "  --gitea-binary PATH        Gitea binary path (default: auto-detect)"
+  echo "  --gitea-config FILE        Gitea app.ini path (default: /etc/gitea/app.ini)"
+  echo "  --gitea-work-path DIR      Optional Gitea work path"
+  echo "  --gitea-run-user USER      Unix SSH user used by Gitea (default: git)"
+  echo "  --gitea-access-role ID     Entra role claim allowed to authenticate as git (default: factory-ssh-access)"
+  echo "  --gitea-allow-unverified-email  Allow matching unverified Gitea email records"
+  echo "  --gitea-synthetic-read-only     Create synthetic Gitea key records as read-only"
   echo "  --jump-principals LIST     Space/comma separated users allowed to forward (default: factory)"
   echo "  --permit-open LIST         PermitOpen value for jump users (default: any)"
   echo "  --client-alive-interval N  Seconds between server keepalives for jump users (default: 30)"
@@ -94,10 +118,54 @@ while [[ $# -gt 0 ]]; do
     ;;
   --factory-access-group)
     FACTORY_ACCESS_GROUP="${2:-}"
+    if [[ "$GITEA_ACCESS_ROLE_SET" == false ]]; then
+      GITEA_ACCESS_ROLE="${2:-}"
+    fi
     shift 2
     ;;
   --no-create-factory-user)
     CREATE_FACTORY_USER=false
+    shift
+    ;;
+  --configure-gitea-opkssh)
+    CONFIGURE_GITEA_OPKSSH=true
+    shift
+    ;;
+  --gitea-url)
+    GITEA_URL="${2:-}"
+    shift 2
+    ;;
+  --gitea-token-file)
+    GITEA_TOKEN_FILE="${2:-}"
+    shift 2
+    ;;
+  --gitea-binary)
+    GITEA_BINARY="${2:-}"
+    shift 2
+    ;;
+  --gitea-config)
+    GITEA_CONFIG="${2:-}"
+    shift 2
+    ;;
+  --gitea-work-path)
+    GITEA_WORK_PATH="${2:-}"
+    shift 2
+    ;;
+  --gitea-run-user)
+    GITEA_RUN_USER="${2:-}"
+    shift 2
+    ;;
+  --gitea-access-role)
+    GITEA_ACCESS_ROLE="${2:-}"
+    GITEA_ACCESS_ROLE_SET=true
+    shift 2
+    ;;
+  --gitea-allow-unverified-email)
+    GITEA_REQUIRE_VERIFIED_EMAIL=false
+    shift
+    ;;
+  --gitea-synthetic-read-only)
+    GITEA_SYNTHETIC_KEY_READ_ONLY=true
     shift
     ;;
   --jump-principals)
@@ -238,11 +306,85 @@ if [[ "$CONFIGURE_SSHD_OPKSSH" == true ]]; then
 
   install -d -m 755 "$SSHD_CONFIG_DIR"
 
+  if [[ "$CONFIGURE_GITEA_OPKSSH" == true ]]; then
+    info "Installing Gitea OPKSSH AuthorizedKeysCommand bridge"
+
+    if ! id "$GITEA_RUN_USER" >/dev/null 2>&1; then
+      err "Gitea SSH user '$GITEA_RUN_USER' does not exist. Create it or pass --gitea-run-user."
+      exit 1
+    fi
+
+    if command -v usermod >/dev/null 2>&1; then
+      usermod -a -G opksshuser "$GITEA_RUN_USER"
+      ok "Allowed $GITEA_RUN_USER to read OPKSSH config through group opksshuser"
+    else
+      warn "usermod was not found. Ensure '$GITEA_RUN_USER' can read /etc/opk files through group opksshuser."
+    fi
+
+    if [[ ! -x "$GITEA_BRIDGE_SOURCE_SCRIPT" ]]; then
+      if [[ -x "$SCRIPT_DIR/gitea-opkssh-authorized-keys" ]]; then
+        GITEA_BRIDGE_SOURCE_SCRIPT="$SCRIPT_DIR/gitea-opkssh-authorized-keys"
+      elif command -v gitea-opkssh-authorized-keys >/dev/null 2>&1; then
+        GITEA_BRIDGE_SOURCE_SCRIPT="$(command -v gitea-opkssh-authorized-keys)"
+      else
+        err "Gitea OPKSSH bridge script is missing or not executable: $GITEA_BRIDGE_SOURCE_SCRIPT"
+        echo "Install the flake package or run this script from the repository root."
+        exit 1
+      fi
+    fi
+
+    install -d -m 755 "$(dirname "$GITEA_BRIDGE_INSTALL_PATH")"
+    install -m 755 "$GITEA_BRIDGE_SOURCE_SCRIPT" "$GITEA_BRIDGE_INSTALL_PATH"
+    ok "Installed Gitea bridge: $GITEA_BRIDGE_INSTALL_PATH"
+
+    if [[ -z "$GITEA_BINARY" ]]; then
+      if command -v gitea >/dev/null 2>&1; then
+        GITEA_BINARY="$(command -v gitea)"
+      elif [[ -x /usr/local/bin/gitea ]]; then
+        GITEA_BINARY="/usr/local/bin/gitea"
+      else
+        GITEA_BINARY="/usr/local/bin/gitea"
+        warn "Could not auto-detect gitea binary; using $GITEA_BINARY. Override with --gitea-binary if needed."
+      fi
+    fi
+
+    install -d -m 755 "$(dirname "$GITEA_BRIDGE_CONFIG")"
+    cat >"$GITEA_BRIDGE_CONFIG" <<EOF
+# Managed by UGA Manufacturing Living Labs OPKSSH setup.
+GITEA_URL="$GITEA_URL"
+GITEA_TOKEN_FILE="$GITEA_TOKEN_FILE"
+GITEA_BINARY="$GITEA_BINARY"
+GITEA_CONFIG="$GITEA_CONFIG"
+GITEA_WORK_PATH="$GITEA_WORK_PATH"
+GITEA_RUN_USER="$GITEA_RUN_USER"
+GITEA_KEY_TITLE_PREFIX="opkssh-oidc"
+GITEA_REQUIRE_VERIFIED_EMAIL="$GITEA_REQUIRE_VERIFIED_EMAIL"
+GITEA_SYNTHETIC_KEY_READ_ONLY="$GITEA_SYNTHETIC_KEY_READ_ONLY"
+OPKSSH_BINARY="$OPKSSH_PATH"
+EOF
+    chmod 640 "$GITEA_BRIDGE_CONFIG"
+    chown root:opksshuser "$GITEA_BRIDGE_CONFIG"
+    ok "Wrote $GITEA_BRIDGE_CONFIG"
+
+    if [[ -f "$GITEA_TOKEN_FILE" ]]; then
+      chown root:opksshuser "$GITEA_TOKEN_FILE" || warn "Could not chown $GITEA_TOKEN_FILE to root:opksshuser"
+      chmod 640 "$GITEA_TOKEN_FILE" || warn "Could not chmod $GITEA_TOKEN_FILE to 640"
+    else
+      warn "Create $GITEA_TOKEN_FILE with a Gitea admin API token before testing OPKSSH Git auth."
+    fi
+
+    AUTHORIZED_KEYS_COMMAND="$GITEA_BRIDGE_INSTALL_PATH --config $GITEA_BRIDGE_CONFIG --principal %u --key-type %t --key %k"
+    AUTHORIZED_KEYS_COMMAND_USER="$GITEA_RUN_USER"
+  else
+    AUTHORIZED_KEYS_COMMAND="$OPKSSH_PATH verify %u %k %t"
+    AUTHORIZED_KEYS_COMMAND_USER="opksshuser"
+  fi
+
   cat >"$SSHD_OPKSSH_CONFIG" <<EOF
 # Managed by UGA Manufacturing Living Labs OPKSSH setup.
 PubkeyAuthentication yes
-AuthorizedKeysCommand $OPKSSH_PATH verify %u %k %t
-AuthorizedKeysCommandUser opksshuser
+AuthorizedKeysCommand $AUTHORIZED_KEYS_COMMAND
+AuthorizedKeysCommandUser $AUTHORIZED_KEYS_COMMAND_USER
 EOF
 
   chmod 644 "$SSHD_OPKSSH_CONFIG"
@@ -319,6 +461,7 @@ if [[ -n "$GROUP_MAP" || -n "$ROLE_MAP" || -n "$EMAIL_MAP" ]]; then
 fi
 
 FACTORY_AUTH_LINE="${FACTORY_USER} oidc:roles:${FACTORY_ACCESS_GROUP} ${UGA_ISSUER}"
+GITEA_AUTH_LINE="${GITEA_RUN_USER} oidc:roles:${GITEA_ACCESS_ROLE} ${UGA_ISSUER}"
 
 info "Ensuring factory shared-user authorization"
 
@@ -341,6 +484,19 @@ else
   echo "$FACTORY_AUTH_LINE" >>"$AUTH_ID_FILE"
   ok "Added factory shared-user auth:"
   echo "    $FACTORY_AUTH_LINE"
+fi
+
+if [[ "$CONFIGURE_GITEA_OPKSSH" == true ]]; then
+  info "Ensuring Gitea OPKSSH authorization"
+
+  if grep -Fq "$GITEA_AUTH_LINE" "$AUTH_ID_FILE"; then
+    ok "Gitea OPKSSH auth already exists:"
+    echo "    $GITEA_AUTH_LINE"
+  else
+    echo "$GITEA_AUTH_LINE" >>"$AUTH_ID_FILE"
+    ok "Added Gitea OPKSSH auth:"
+    echo "    $GITEA_AUTH_LINE"
+  fi
 fi
 
 if [[ "$CONFIGURE_JUMP_HOST" == true ]]; then
@@ -455,6 +611,12 @@ echo
 echo "sshd OPKSSH:"
 if [[ "$CONFIGURE_SSHD_OPKSSH" == true ]]; then
   echo "  configured: $SSHD_OPKSSH_CONFIG"
+  if [[ "$CONFIGURE_GITEA_OPKSSH" == true ]]; then
+    echo "  gitea bridge: $GITEA_BRIDGE_INSTALL_PATH"
+    echo "  gitea bridge config: $GITEA_BRIDGE_CONFIG"
+    echo "  gitea SSH user: $GITEA_RUN_USER"
+    echo "  gitea access role: $GITEA_ACCESS_ROLE"
+  fi
 else
   echo "  not configured"
 fi

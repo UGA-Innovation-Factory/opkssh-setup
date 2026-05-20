@@ -12,7 +12,13 @@ let
     issuer = defaultIssuer;
   };
 
-  effectiveRoleMappings = factoryAccessMappings ++ cfg.opkssh.roleMappings;
+  giteaAccessMappings = lib.optional cfg.giteaOpkssh.enable {
+    user = cfg.giteaOpkssh.runUser;
+    role = cfg.giteaOpkssh.accessRole;
+    issuer = defaultIssuer;
+  };
+
+  effectiveRoleMappings = factoryAccessMappings ++ giteaAccessMappings ++ cfg.opkssh.roleMappings;
 
   factoryNoShellCommand = pkgs.writeShellScript "factory-ssh-no-shell" ''
     set -euo pipefail
@@ -74,9 +80,30 @@ EOF
     "local=/${cfg.internalNetwork.domain}/"
   ] ++ hostRecordLines ++ dhcpRangeLines ++ dhcpHostLines ++ lib.optional (cfg.internalNetwork.extraDnsmasqConfig != "") cfg.internalNetwork.extraDnsmasqConfig);
 
-  hasAuthMappings = cfg.opkssh.roleMappings != [ ] || cfg.opkssh.groupMappings != [ ] || cfg.opkssh.emailMappings != [ ];
+  hasAuthMappings = cfg.giteaOpkssh.enable || cfg.opkssh.roleMappings != [ ] || cfg.opkssh.groupMappings != [ ] || cfg.opkssh.emailMappings != [ ];
 
   jumpUsers = lib.concatStringsSep "," cfg.jumpHost.users;
+
+  giteaOpksshBridge = pkgs.writeTextFile {
+    name = "gitea-opkssh-authorized-keys";
+    destination = "/bin/gitea-opkssh-authorized-keys";
+    executable = true;
+    text = builtins.readFile ../scripts/gitea_opkssh_authorized_keys;
+  };
+
+  giteaOpksshEnv = ''
+    # Managed by services.uga-living-labs.
+    GITEA_URL="${cfg.giteaOpkssh.url}"
+    GITEA_TOKEN_FILE="${cfg.giteaOpkssh.tokenFile}"
+    GITEA_BINARY="${cfg.giteaOpkssh.giteaBinary}"
+    GITEA_CONFIG="${cfg.giteaOpkssh.configFile}"
+    GITEA_WORK_PATH="${cfg.giteaOpkssh.workPath}"
+    GITEA_RUN_USER="${cfg.giteaOpkssh.runUser}"
+    GITEA_KEY_TITLE_PREFIX="${cfg.giteaOpkssh.keyTitlePrefix}"
+    GITEA_REQUIRE_VERIFIED_EMAIL="${lib.boolToString cfg.giteaOpkssh.requireVerifiedEmail}"
+    GITEA_SYNTHETIC_KEY_READ_ONLY="${lib.boolToString cfg.giteaOpkssh.syntheticKeyReadOnly}"
+    OPKSSH_BINARY="${cfg.opkssh.package}/bin/opkssh"
+  '';
 
   dnsDhcpFirewallForInterfaces =
     lib.genAttrs cfg.internalNetwork.interfaces (_: {
@@ -276,6 +303,74 @@ in
       };
     };
 
+    giteaOpkssh = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Enable dynamic OPKSSH-backed Git-over-SSH authentication for the Gitea SSH user.";
+      };
+
+      url = lib.mkOption {
+        type = lib.types.str;
+        default = "http://127.0.0.1:3000";
+        description = "Local Gitea HTTP base URL used for API lookups.";
+      };
+
+      tokenFile = lib.mkOption {
+        type = lib.types.str;
+        default = "/etc/opk/gitea-token";
+        description = "Path to a Gitea admin API token readable by the opksshuser group.";
+      };
+
+      giteaBinary = lib.mkOption {
+        type = lib.types.str;
+        default = "/usr/local/bin/gitea";
+        description = "Path to the Gitea binary used for native static-key checks and serv commands.";
+      };
+
+      configFile = lib.mkOption {
+        type = lib.types.str;
+        default = "/etc/gitea/app.ini";
+        description = "Path to Gitea app.ini.";
+      };
+
+      workPath = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Optional Gitea work path passed to the gitea command.";
+      };
+
+      runUser = lib.mkOption {
+        type = lib.types.str;
+        default = "git";
+        description = "Unix SSH user used by Gitea.";
+      };
+
+      accessRole = lib.mkOption {
+        type = lib.types.str;
+        default = "factory-ssh-access";
+        description = "OIDC role claim allowed to authenticate as the Gitea SSH user before Gitea email permissions are checked.";
+      };
+
+      keyTitlePrefix = lib.mkOption {
+        type = lib.types.str;
+        default = "opkssh-oidc";
+        description = "Title prefix for synthetic Gitea key records created for OPKSSH identities.";
+      };
+
+      requireVerifiedEmail = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Only match verified Gitea email addresses to OPKSSH certificate identities.";
+      };
+
+      syntheticKeyReadOnly = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Create synthetic Gitea key records with read-only permissions.";
+      };
+    };
+
     internalNetwork = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -407,6 +502,10 @@ in
           assertion = !cfg.internalNetwork.enable || cfg.internalNetwork.interfaces != [ ];
           message = "services.uga-living-labs.internalNetwork.interfaces must list at least one interface when internalNetwork.enable is true.";
         }
+        {
+          assertion = !cfg.giteaOpkssh.enable || cfg.opkssh.enable;
+          message = "services.uga-living-labs.giteaOpkssh.enable requires opkssh.enable.";
+        }
       ];
     }
 
@@ -418,7 +517,8 @@ in
         }
       ];
 
-      environment.systemPackages = lib.optional (cfg.opkssh.package != null) cfg.opkssh.package;
+      environment.systemPackages = lib.optional (cfg.opkssh.package != null) cfg.opkssh.package
+        ++ lib.optional cfg.giteaOpkssh.enable giteaOpksshBridge;
 
       users.groups.opksshuser = { };
       users.users.opksshuser = {
@@ -430,14 +530,30 @@ in
         description = "Low-privilege OPKSSH AuthorizedKeysCommand user";
       };
 
+      users.users."${cfg.giteaOpkssh.runUser}".extraGroups =
+        lib.mkIf cfg.giteaOpkssh.enable [ "opksshuser" ];
+
       services.openssh.enable = true;
       services.openssh.settings = lib.mkIf (cfg.opkssh.package != null) {
-        AuthorizedKeysCommand = "${cfg.opkssh.package}/bin/opkssh verify %u %k %t";
-        AuthorizedKeysCommandUser = "opksshuser";
+        AuthorizedKeysCommand =
+          if cfg.giteaOpkssh.enable
+          then "${giteaOpksshBridge}/bin/gitea-opkssh-authorized-keys --config /etc/opk/gitea-opkssh.env --principal %u --key-type %t --key %k"
+          else "${cfg.opkssh.package}/bin/opkssh verify %u %k %t";
+        AuthorizedKeysCommandUser =
+          if cfg.giteaOpkssh.enable
+          then cfg.giteaOpkssh.runUser
+          else "opksshuser";
       };
 
       environment.etc."opk/providers" = {
         text = providersText;
+        mode = "0640";
+        user = "root";
+        group = "opksshuser";
+      };
+
+      environment.etc."opk/gitea-opkssh.env" = lib.mkIf cfg.giteaOpkssh.enable {
+        text = giteaOpksshEnv;
         mode = "0640";
         user = "root";
         group = "opksshuser";

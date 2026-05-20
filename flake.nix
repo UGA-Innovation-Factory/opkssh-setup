@@ -32,6 +32,7 @@
             install -Dm755 server_setup $out/bin/uga-opkssh-server-setup
             install -Dm755 scripts/living_labs_auth_sync $out/bin/living-labs-auth-sync
             install -Dm755 scripts/factory_ssh_no_shell $out/bin/factory-ssh-no-shell
+            install -Dm755 scripts/gitea_opkssh_authorized_keys $out/bin/gitea-opkssh-authorized-keys
 
             install -Dm644 README.md $out/share/doc/uga-living-labs-opkssh/README.md
             install -Dm644 docs/architecture.md $out/share/doc/uga-living-labs-opkssh/architecture.md

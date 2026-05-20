@@ -28,6 +28,8 @@ bastion can resolve and route to the subset they should expose.
   forwarding, and optional internal DNS/DHCP service.
 - `scripts/living_labs_auth_sync` compiles Entra group and email maps into
   `/etc/opk/auth_id`.
+- `scripts/gitea_opkssh_authorized_keys` bridges OPKSSH certificates into
+  Gitea Git-over-SSH authorization without hard-coded Gitea users.
 - `examples/entra_groups.tsv` maps Linux users to Entra group IDs or emitted
   group names.
 - `examples/email_users.tsv` maps Linux users to individual OIDC emails or
@@ -146,6 +148,52 @@ The bastion controls reachability. The internal host controls login
 authorization. Use both layers: route/firewall/VLAN policy for network
 segmentation, and OPKSSH `auth_id` policy for who can assume each Linux user.
 
+## Gitea Git SSH With OPKSSH
+
+On a Gitea host, the system sshd can use the Gitea-aware OPKSSH bridge instead
+of calling `opkssh verify` directly:
+
+```sh
+sudo install -m 640 -o root -g opksshuser /dev/null /etc/opk/gitea-token
+sudo editor /etc/opk/gitea-token
+sudo ./server_setup --configure-jump-host --configure-gitea-opkssh
+```
+
+`/etc/opk/gitea-token` must contain a Gitea admin API token. The bridge uses it
+only for local API lookups and synthetic key record creation.
+
+The bridge keeps native Gitea keys working. For `git@factory.uga.edu`, sshd
+first asks Gitea's native `gitea keys` command whether the offered key is a
+normal static Gitea key. If that fails and the offered key is an OPKSSH user
+certificate, the bridge:
+
+- verifies the certificate with OPKSSH against the `git` Unix principal,
+- reads the OPKSSH certificate Key ID as the OIDC email address,
+- searches Gitea for exactly one matching email address, verified by default,
+- creates or reuses an inert synthetic Gitea SSH key record for that user,
+- emits a forced `gitea serv key-<id>` authorized-keys line for the presented
+  OPKSSH certificate.
+
+No Gitea usernames are hard-coded. The effective Git permission check remains
+inside Gitea because `gitea serv key-<id>` runs as the matched Gitea user and
+enforces normal repository permissions.
+
+When `--configure-gitea-opkssh` is enabled, `AuthorizedKeysCommandUser` is set
+to the configured Gitea SSH Unix user, `git` by default, because that is the
+documented execution model for `gitea keys`. The setup script adds that user to
+the `opksshuser` group so the same bridge can also read `/etc/opk/providers`,
+`/etc/opk/auth_id`, and `/etc/opk/gitea-token`.
+
+The OPKSSH gate for the `git` Unix principal defaults to the same Entra app
+role used by the factory jump user:
+
+```text
+git oidc:roles:factory-ssh-access https://login.microsoftonline.com/a8216c1e-4d63-4352-8c3b-50fa1f1475b1/v2.0
+```
+
+Use `--gitea-access-role ROLE` if Git SSH should require a different Entra app
+role before Gitea email and repository permissions are checked.
+
 ## Nix Flake and NixOS
 
 This repository can be used as a flake:
@@ -182,6 +230,8 @@ The module lives at `services.uga-living-labs`. It can:
 - configure OpenSSH as a `ProxyJump` entry point,
 - configure `dnsmasq` for internal DNS and DHCP on the lab network,
 - open DNS/DHCP firewall ports on the configured internal interfaces.
+- optionally enable `services.uga-living-labs.giteaOpkssh` so Git-over-SSH can
+  authenticate OPKSSH certificates through live Gitea email lookups.
 
 See `examples/nixos/dns-dhcp-bastion.nix` for a combined DNS/DHCP and bastion
 host serving `livinglabs.internal`.

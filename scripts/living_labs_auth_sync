@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RED=$'\033[31m'
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+BLUE=$'\033[34m'
+BOLD=$'\033[1m'
+RESET=$'\033[0m'
+
+info() { echo "${BLUE}==>${RESET} $*"; }
+ok() { echo "${GREEN}OK:${RESET} $*"; }
+warn() { echo "${YELLOW}WARN:${RESET} $*"; }
+err() { echo "${RED}ERROR:${RESET} $*" >&2; }
+
+UGA_ISSUER_DEFAULT="https://login.microsoftonline.com/a8216c1e-4d63-4352-8c3b-50fa1f1475b1/v2.0"
+AUTH_ID_FILE="/etc/opk/auth_id"
+GROUP_MAP=""
+EMAIL_MAP=""
+ISSUER="$UGA_ISSUER_DEFAULT"
+DRY_RUN=false
+
+usage() {
+  echo "${BOLD}Usage:${RESET} $0 --group-map FILE [--email-map FILE] [options]"
+  echo
+  echo "Build /etc/opk/auth_id entries from Living Labs authorization maps."
+  echo
+  echo "Options:"
+  echo "  --group-map FILE      TSV/space file: linux_user entra_group_id_or_name [issuer]"
+  echo "  --email-map FILE      TSV/space file: linux_user email_or_sub [issuer]"
+  echo "  --issuer URI          Default issuer for entries without an issuer"
+  echo "  --auth-id FILE        Destination auth_id file (default: /etc/opk/auth_id)"
+  echo "  --dry-run             Print generated auth_id content without writing"
+  echo "  -h, --help            Show this help message"
+  echo
+  echo "Blank lines and lines beginning with # are ignored."
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --group-map)
+    GROUP_MAP="${2:-}"
+    shift 2
+    ;;
+  --email-map)
+    EMAIL_MAP="${2:-}"
+    shift 2
+    ;;
+  --issuer)
+    ISSUER="${2:-}"
+    shift 2
+    ;;
+  --auth-id)
+    AUTH_ID_FILE="${2:-}"
+    shift 2
+    ;;
+  --dry-run)
+    DRY_RUN=true
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    err "Unknown argument: $1"
+    echo
+    usage
+    exit 1
+    ;;
+  esac
+done
+
+if [[ -z "$GROUP_MAP" && -z "$EMAIL_MAP" ]]; then
+  err "At least one of --group-map or --email-map is required."
+  echo
+  usage
+  exit 1
+fi
+
+for map_file in "$GROUP_MAP" "$EMAIL_MAP"; do
+  if [[ -n "$map_file" && ! -f "$map_file" ]]; then
+    err "Map file not found: $map_file"
+    exit 1
+  fi
+done
+
+if [[ "$DRY_RUN" == false && "${EUID}" -ne 0 ]]; then
+  err "Writing $AUTH_ID_FILE requires root."
+  echo "Try:"
+  echo "  sudo $0 $*"
+  exit 1
+fi
+
+TMP_FILE="$(mktemp)"
+trap 'rm -f "$TMP_FILE"' EXIT
+
+{
+  echo "# Managed by living_labs_auth_sync."
+  echo "# principal identity issuer"
+} >"$TMP_FILE"
+
+append_map() {
+  local mode="$1"
+  local path="$2"
+  local line_no=0
+  local principal identity entry_issuer extra
+
+  [[ -z "$path" ]] && return 0
+
+  while read -r principal identity entry_issuer extra || [[ -n "${principal:-}" ]]; do
+    line_no=$((line_no + 1))
+
+    [[ -z "${principal:-}" ]] && continue
+    [[ "$principal" == \#* ]] && continue
+
+    if [[ -z "${identity:-}" ]]; then
+      err "$path:$line_no is missing an identity value"
+      exit 1
+    fi
+
+    if [[ -n "${extra:-}" ]]; then
+      err "$path:$line_no has too many fields"
+      exit 1
+    fi
+
+    entry_issuer="${entry_issuer:-$ISSUER}"
+
+    case "$mode" in
+    group)
+      printf '%s oidc:groups:%s %s\n' "$principal" "$identity" "$entry_issuer"
+      ;;
+    email)
+      printf '%s %s %s\n' "$principal" "$identity" "$entry_issuer"
+      ;;
+    esac
+  done <"$path" >>"$TMP_FILE"
+}
+
+append_map group "$GROUP_MAP"
+append_map email "$EMAIL_MAP"
+
+if [[ "$DRY_RUN" == true ]]; then
+  cat "$TMP_FILE"
+  exit 0
+fi
+
+info "Installing OPKSSH authorization policy"
+install -d -m 755 /etc/opk
+
+if [[ -f "$AUTH_ID_FILE" ]]; then
+  BACKUP="${AUTH_ID_FILE}.backup.$(date +%Y%m%d-%H%M%S)"
+  cp "$AUTH_ID_FILE" "$BACKUP"
+  ok "Backup created: $BACKUP"
+fi
+
+install -m 640 "$TMP_FILE" "$AUTH_ID_FILE"
+
+if getent group opksshuser >/dev/null 2>&1; then
+  chown root:opksshuser "$AUTH_ID_FILE"
+else
+  warn "Group opksshuser does not exist yet; leaving $AUTH_ID_FILE owned by root."
+fi
+
+ok "Wrote $AUTH_ID_FILE"

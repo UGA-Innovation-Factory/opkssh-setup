@@ -1,0 +1,4 @@
+# linux_user email_or_oidc_sub [issuer]
+# Use this for private hosts or collaborators who are not governed by UGA Entra groups.
+dev alice@example.edu
+robotics bob@example.com

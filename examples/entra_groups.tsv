@@ -1,0 +1,5 @@
+# linux_user entra_group_id_or_name [issuer]
+# Prefer Entra group object IDs unless your OPKSSH token emits stable names.
+factory factory-ssh-access
+dev 00000000-0000-0000-0000-000000000000
+robotics 11111111-1111-1111-1111-111111111111

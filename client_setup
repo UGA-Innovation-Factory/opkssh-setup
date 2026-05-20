@@ -15,6 +15,73 @@ err() { echo "${RED}ERROR:${RESET} $*" >&2; }
 
 CONFIG_DIR="$HOME/.opk"
 CONFIG_FILE="$CONFIG_DIR/config.yml"
+SSH_DIR="$HOME/.ssh"
+SSH_CONFIG="$SSH_DIR/config"
+
+FACTORY_HOST="factory.uga.edu"
+FACTORY_ALIAS="factory"
+INTERNAL_PATTERN="*.factory.internal"
+FACTORY_USER="factory"
+REMOTE_USER="${USER}"
+UPDATE_SSH_CONFIG=true
+
+usage() {
+  echo "${BOLD}Usage:${RESET} $0 [options]"
+  echo
+  echo "Options:"
+  echo "  --factory-host HOST       Public SSH bastion host (default: factory.uga.edu)"
+  echo "  --factory-alias ALIAS     Local SSH alias for the bastion (default: factory)"
+  echo "  --factory-user USER       Remote user for the bastion (default: factory)"
+  echo "  --internal-pattern GLOB   Hosts reached through ProxyJump (default: *.factory.internal)"
+  echo "  --remote-user USER        Remote user for internal hosts (default: current user)"
+  echo "  --linux-user USER         Set both factory and internal remote users"
+  echo "  --no-ssh-config          Only write OPKSSH config; skip ~/.ssh/config"
+  echo "  -h, --help               Show this help message"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --factory-host)
+    FACTORY_HOST="${2:-}"
+    shift 2
+    ;;
+  --factory-alias)
+    FACTORY_ALIAS="${2:-}"
+    shift 2
+    ;;
+  --factory-user)
+    FACTORY_USER="${2:-}"
+    shift 2
+    ;;
+  --internal-pattern)
+    INTERNAL_PATTERN="${2:-}"
+    shift 2
+    ;;
+  --remote-user)
+    REMOTE_USER="${2:-}"
+    shift 2
+    ;;
+  --linux-user)
+    FACTORY_USER="${2:-}"
+    REMOTE_USER="${2:-}"
+    shift 2
+    ;;
+  --no-ssh-config)
+    UPDATE_SSH_CONFIG=false
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    err "Unknown argument: $1"
+    echo
+    usage
+    exit 1
+    ;;
+  esac
+done
 
 info "Creating OPKSSH config directory"
 mkdir -p "$CONFIG_DIR"
@@ -49,6 +116,51 @@ YAML
 chmod 600 "$CONFIG_FILE"
 ok "Wrote config: $CONFIG_FILE"
 
+if [[ "$UPDATE_SSH_CONFIG" == true ]]; then
+  info "Configuring SSH ProxyJump entries"
+  mkdir -p "$SSH_DIR"
+  chmod 700 "$SSH_DIR"
+  touch "$SSH_CONFIG"
+  chmod 600 "$SSH_CONFIG"
+
+  START_MARKER="# >>> UGA Manufacturing Living Labs OPKSSH"
+  END_MARKER="# <<< UGA Manufacturing Living Labs OPKSSH"
+  TMP_CONFIG="$(mktemp)"
+
+  if grep -Fq "$START_MARKER" "$SSH_CONFIG"; then
+    awk -v start="$START_MARKER" -v end="$END_MARKER" '
+      $0 == start { skip = 1; next }
+      $0 == end { skip = 0; next }
+      skip != 1 { print }
+    ' "$SSH_CONFIG" >"$TMP_CONFIG"
+  else
+    cp "$SSH_CONFIG" "$TMP_CONFIG"
+  fi
+
+  {
+    cat "$TMP_CONFIG"
+    if [[ -s "$TMP_CONFIG" ]]; then
+      echo
+    fi
+    echo "$START_MARKER"
+    echo "Host $FACTORY_ALIAS $FACTORY_HOST"
+    echo "  HostName $FACTORY_HOST"
+    echo "  User $FACTORY_USER"
+    echo "  IdentitiesOnly yes"
+    echo "  IdentityFile ~/.ssh/id_ecdsa"
+    echo
+    echo "Host $INTERNAL_PATTERN"
+    echo "  User $REMOTE_USER"
+    echo "  ProxyJump $FACTORY_ALIAS"
+    echo "  IdentitiesOnly yes"
+    echo "  IdentityFile ~/.ssh/id_ecdsa"
+    echo "$END_MARKER"
+  } >"$SSH_CONFIG"
+
+  rm -f "$TMP_CONFIG"
+  ok "Updated SSH config: $SSH_CONFIG"
+fi
+
 info "Checking for opkssh on PATH"
 
 if command -v opkssh >/dev/null 2>&1; then
@@ -60,6 +172,10 @@ if command -v opkssh >/dev/null 2>&1; then
   echo
   echo "Next step:"
   echo "  opkssh login uga"
+  echo
+  echo "Example jump usage:"
+  echo "  ssh -J $FACTORY_ALIAS $REMOTE_USER@internal-host"
+  echo "  ssh $REMOTE_USER@<host matching $INTERNAL_PATTERN>"
 else
   warn "opkssh was not found on your PATH."
 

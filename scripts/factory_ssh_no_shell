@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IDENTIFIED_USER="${OPKSSH_IDENTIFIED_USER:-${USER:-factory}}"
+OIDC_SOURCE="${OPKSSH_OIDC_SOURCE:-UGA Entra}"
+
+cat <<EOF
+Your authentication has passed as user ${IDENTIFIED_USER} with OIDC source ${OIDC_SOURCE}, but shell access is not enabled for this host.
+If you are not the user that was identified, please run 'opkssh login'
+EOF
+
+exit 1

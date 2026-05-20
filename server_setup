@@ -15,6 +15,7 @@ err() { echo "${RED}ERROR:${RESET} $*" >&2; }
 
 PROVIDERS_DIR="/etc/opk"
 PROVIDERS_FILE="/etc/opk/providers"
+AUTH_ID_FILE="/etc/opk/auth_id"
 
 UGA_ISSUER="https://login.microsoftonline.com/a8216c1e-4d63-4352-8c3b-50fa1f1475b1/v2.0"
 UGA_CLIENT_ID="7f331a0a-da1a-4e13-8df0-e9baba02ed86"
@@ -24,17 +25,42 @@ UGA_PROVIDER_LINE="${UGA_ISSUER} ${UGA_CLIENT_ID} ${UGA_TTL}"
 INSTALL_URL="https://raw.githubusercontent.com/openpubkey/opkssh/main/scripts/install-linux.sh"
 
 PROVIDERS_ONLY=false
+CONFIGURE_JUMP_HOST=false
+GROUP_MAP=""
+EMAIL_MAP=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUTH_SYNC_SCRIPT="$SCRIPT_DIR/scripts/living_labs_auth_sync"
+SSHD_CONFIG_DIR="/etc/ssh/sshd_config.d"
+SSHD_JUMP_CONFIG="$SSHD_CONFIG_DIR/60-uga-living-labs-jump.conf"
+NO_SHELL_SOURCE_SCRIPT="$SCRIPT_DIR/scripts/factory_ssh_no_shell"
+NO_SHELL_INSTALL_PATH="/usr/local/libexec/uga-living-labs/factory-ssh-no-shell"
+JUMP_PRINCIPALS="factory"
+PERMIT_OPEN="any"
+FACTORY_USER="factory"
+FACTORY_ACCESS_GROUP="factory-ssh-access"
+INSTALL_NO_SHELL_COMMAND=true
+CREATE_FACTORY_USER=true
 
 usage() {
   echo "${BOLD}Usage:${RESET} $0 [options]"
   echo
   echo "Options:"
-  echo "  -p, --providers-only   Only install/update providers file (skip opkssh install)"
-  echo "  -h, --help             Show this help message"
+  echo "  -p, --providers-only       Only install/update providers file (skip opkssh install)"
+  echo "  --configure-jump-host      Add sshd_config.d snippet for ssh -J forwarding"
+  echo "  --factory-user USER        Shared bastion username (default: factory)"
+  echo "  --factory-access-group ID  Entra group/role claim for factory user (default: factory-ssh-access)"
+  echo "  --no-create-factory-user   Do not create the shared bastion Unix user"
+  echo "  --jump-principals LIST     Space/comma separated users allowed to forward (default: factory)"
+  echo "  --permit-open LIST         PermitOpen value for jump users (default: any)"
+  echo "  --no-no-shell-command      Do not install ForceCommand no-shell message"
+  echo "  --group-map FILE           Apply Entra group-to-Linux-user auth map"
+  echo "  --email-map FILE           Apply email/sub-to-Linux-user auth map"
+  echo "  -h, --help                 Show this help message"
   echo
   echo "Examples:"
   echo "  sudo $0"
   echo "  sudo $0 --providers-only"
+  echo "  sudo $0 --configure-jump-host --group-map examples/entra_groups.tsv"
 }
 
 # --- Parse args ---
@@ -43,6 +69,43 @@ while [[ $# -gt 0 ]]; do
   -p | --providers-only)
     PROVIDERS_ONLY=true
     shift
+    ;;
+  --configure-jump-host)
+    CONFIGURE_JUMP_HOST=true
+    shift
+    ;;
+  --factory-user)
+    FACTORY_USER="${2:-}"
+    JUMP_PRINCIPALS="${2:-}"
+    shift 2
+    ;;
+  --factory-access-group)
+    FACTORY_ACCESS_GROUP="${2:-}"
+    shift 2
+    ;;
+  --no-create-factory-user)
+    CREATE_FACTORY_USER=false
+    shift
+    ;;
+  --jump-principals)
+    JUMP_PRINCIPALS="${2:-}"
+    shift 2
+    ;;
+  --permit-open)
+    PERMIT_OPEN="${2:-}"
+    shift 2
+    ;;
+  --no-no-shell-command)
+    INSTALL_NO_SHELL_COMMAND=false
+    shift
+    ;;
+  --group-map)
+    GROUP_MAP="${2:-}"
+    shift 2
+    ;;
+  --email-map)
+    EMAIL_MAP="${2:-}"
+    shift 2
     ;;
   -h | --help)
     usage
@@ -135,6 +198,12 @@ fi
 
 chmod 640 "$PROVIDERS_FILE"
 
+if getent group opksshuser >/dev/null 2>&1; then
+  chown root:opksshuser "$PROVIDERS_FILE"
+else
+  warn "Group opksshuser does not exist yet; leaving $PROVIDERS_FILE owned by root."
+fi
+
 info "Checking for existing provider entry"
 
 if grep -Fq "$UGA_ISSUER" "$PROVIDERS_FILE"; then
@@ -144,6 +213,144 @@ else
   echo "$UGA_PROVIDER_LINE" >>"$PROVIDERS_FILE"
   ok "Added provider:"
   echo "    $UGA_PROVIDER_LINE"
+fi
+
+if [[ -n "$GROUP_MAP" || -n "$EMAIL_MAP" ]]; then
+  info "Applying Living Labs OPKSSH auth maps"
+
+  if [[ ! -x "$AUTH_SYNC_SCRIPT" ]]; then
+    if [[ -x "$SCRIPT_DIR/living-labs-auth-sync" ]]; then
+      AUTH_SYNC_SCRIPT="$SCRIPT_DIR/living-labs-auth-sync"
+    elif command -v living-labs-auth-sync >/dev/null 2>&1; then
+      AUTH_SYNC_SCRIPT="$(command -v living-labs-auth-sync)"
+    else
+      err "Auth sync script is missing or not executable: $AUTH_SYNC_SCRIPT"
+      echo "Install the flake package or run this script from the repository root."
+      exit 1
+    fi
+  fi
+
+  if [[ ! -x "$AUTH_SYNC_SCRIPT" ]]; then
+    err "Auth sync script is not executable: $AUTH_SYNC_SCRIPT"
+    exit 1
+  fi
+
+  AUTH_SYNC_ARGS=()
+  if [[ -n "$GROUP_MAP" ]]; then
+    AUTH_SYNC_ARGS+=(--group-map "$GROUP_MAP")
+  fi
+  if [[ -n "$EMAIL_MAP" ]]; then
+    AUTH_SYNC_ARGS+=(--email-map "$EMAIL_MAP")
+  fi
+
+  "$AUTH_SYNC_SCRIPT" "${AUTH_SYNC_ARGS[@]}"
+fi
+
+FACTORY_AUTH_LINE="${FACTORY_USER} oidc:groups:${FACTORY_ACCESS_GROUP} ${UGA_ISSUER}"
+
+info "Ensuring factory shared-user authorization"
+
+if [[ ! -f "$AUTH_ID_FILE" ]]; then
+  touch "$AUTH_ID_FILE"
+fi
+
+chmod 640 "$AUTH_ID_FILE"
+
+if getent group opksshuser >/dev/null 2>&1; then
+  chown root:opksshuser "$AUTH_ID_FILE"
+else
+  warn "Group opksshuser does not exist yet; leaving $AUTH_ID_FILE owned by root."
+fi
+
+if grep -Fq "$FACTORY_AUTH_LINE" "$AUTH_ID_FILE"; then
+  ok "Factory shared-user auth already exists:"
+  echo "    $FACTORY_AUTH_LINE"
+else
+  echo "$FACTORY_AUTH_LINE" >>"$AUTH_ID_FILE"
+  ok "Added factory shared-user auth:"
+  echo "    $FACTORY_AUTH_LINE"
+fi
+
+if [[ "$CONFIGURE_JUMP_HOST" == true ]]; then
+  info "Configuring sshd jump-host forwarding policy"
+
+  if [[ "$CREATE_FACTORY_USER" == true ]]; then
+    if id "$FACTORY_USER" >/dev/null 2>&1; then
+      ok "Shared bastion user already exists: $FACTORY_USER"
+    else
+      info "Creating shared bastion user: $FACTORY_USER"
+
+      if command -v useradd >/dev/null 2>&1; then
+        useradd --system --create-home --shell /bin/bash "$FACTORY_USER"
+      else
+        err "useradd was not found. Create user '$FACTORY_USER' manually or rerun with --no-create-factory-user."
+        exit 1
+      fi
+
+      ok "Created shared bastion user: $FACTORY_USER"
+    fi
+  fi
+
+  if [[ ! -d "$SSHD_CONFIG_DIR" ]]; then
+    install -d -m 755 "$SSHD_CONFIG_DIR"
+  fi
+
+  NORMALIZED_PRINCIPALS="$(printf '%s\n' "$JUMP_PRINCIPALS" | tr ' ' ',' | tr -s ',')"
+
+  if [[ "$INSTALL_NO_SHELL_COMMAND" == true ]]; then
+    if [[ ! -x "$NO_SHELL_SOURCE_SCRIPT" ]]; then
+      if [[ -x "$SCRIPT_DIR/factory-ssh-no-shell" ]]; then
+        NO_SHELL_SOURCE_SCRIPT="$SCRIPT_DIR/factory-ssh-no-shell"
+      elif command -v factory-ssh-no-shell >/dev/null 2>&1; then
+        NO_SHELL_SOURCE_SCRIPT="$(command -v factory-ssh-no-shell)"
+      else
+        err "No-shell command script is missing or not executable: $NO_SHELL_SOURCE_SCRIPT"
+        echo "Install the flake package or run this script from the repository root."
+        exit 1
+      fi
+    fi
+
+    install -d -m 755 "$(dirname "$NO_SHELL_INSTALL_PATH")"
+    install -m 755 "$NO_SHELL_SOURCE_SCRIPT" "$NO_SHELL_INSTALL_PATH"
+    ok "Installed no-shell command: $NO_SHELL_INSTALL_PATH"
+    FORCE_COMMAND_LINE="    ForceCommand $NO_SHELL_INSTALL_PATH"
+  else
+    FORCE_COMMAND_LINE=""
+  fi
+
+  cat >"$SSHD_JUMP_CONFIG" <<EOF
+# Managed by UGA Manufacturing Living Labs OPKSSH setup.
+# These users can be used as ProxyJump entry points into lab networks.
+Match User $NORMALIZED_PRINCIPALS
+    AllowTcpForwarding yes
+    PermitTTY no
+    X11Forwarding no
+    AllowAgentForwarding no
+    ExposeAuthInfo yes
+    SetEnv OPKSSH_IDENTIFIED_USER="$FACTORY_USER"
+$FORCE_COMMAND_LINE
+    PermitOpen $PERMIT_OPEN
+EOF
+
+  chmod 644 "$SSHD_JUMP_CONFIG"
+  ok "Wrote $SSHD_JUMP_CONFIG"
+
+  if command -v sshd >/dev/null 2>&1; then
+    if sshd -t; then
+      ok "sshd configuration validates"
+      if command -v systemctl >/dev/null 2>&1; then
+        warn "Reload sshd when ready:"
+        echo "  sudo systemctl reload sshd"
+      else
+        warn "Reload sshd with your platform's service manager when ready."
+      fi
+    else
+      err "sshd configuration did not validate. Review $SSHD_JUMP_CONFIG before reloading sshd."
+      exit 1
+    fi
+  else
+    warn "sshd command not found; could not validate SSH configuration."
+  fi
 fi
 
 echo
@@ -157,4 +364,13 @@ if [[ "$PROVIDERS_ONLY" == true ]]; then
   echo "  providers-only"
 else
   echo "  full server setup"
+fi
+echo
+echo "Jump host:"
+if [[ "$CONFIGURE_JUMP_HOST" == true ]]; then
+  echo "  configured: $SSHD_JUMP_CONFIG"
+  echo "  shared user: $FACTORY_USER"
+  echo "  Entra access group: $FACTORY_ACCESS_GROUP"
+else
+  echo "  not configured (use --configure-jump-host to enable ssh -J forwarding users)"
 fi

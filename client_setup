@@ -24,6 +24,8 @@ INTERNAL_PATTERN="*.factory.internal"
 FACTORY_USER="factory"
 REMOTE_USER="${USER}"
 UPDATE_SSH_CONFIG=true
+SERVER_ALIVE_INTERVAL="20"
+SERVER_ALIVE_COUNT_MAX="6"
 
 usage() {
   echo "${BOLD}Usage:${RESET} $0 [options]"
@@ -35,6 +37,8 @@ usage() {
   echo "  --internal-pattern GLOB   Hosts reached through ProxyJump (default: *.factory.internal)"
   echo "  --remote-user USER        Remote user for internal hosts (default: current user)"
   echo "  --linux-user USER         Set both factory and internal remote users"
+  echo "  --server-alive-interval N Seconds between client keepalives (default: 20)"
+  echo "  --server-alive-count N    Missed keepalives before disconnect (default: 6)"
   echo "  --no-ssh-config          Only write OPKSSH config; skip ~/.ssh/config"
   echo "  -h, --help               Show this help message"
 }
@@ -64,6 +68,14 @@ while [[ $# -gt 0 ]]; do
   --linux-user)
     FACTORY_USER="${2:-}"
     REMOTE_USER="${2:-}"
+    shift 2
+    ;;
+  --server-alive-interval)
+    SERVER_ALIVE_INTERVAL="${2:-}"
+    shift 2
+    ;;
+  --server-alive-count)
+    SERVER_ALIVE_COUNT_MAX="${2:-}"
     shift 2
     ;;
   --no-ssh-config)
@@ -148,12 +160,16 @@ if [[ "$UPDATE_SSH_CONFIG" == true ]]; then
     echo "  User $FACTORY_USER"
     echo "  IdentitiesOnly yes"
     echo "  IdentityFile ~/.ssh/id_ecdsa"
+    echo "  ServerAliveInterval $SERVER_ALIVE_INTERVAL"
+    echo "  ServerAliveCountMax $SERVER_ALIVE_COUNT_MAX"
     echo
     echo "Host $INTERNAL_PATTERN"
     echo "  User $REMOTE_USER"
     echo "  ProxyJump $FACTORY_ALIAS"
     echo "  IdentitiesOnly yes"
     echo "  IdentityFile ~/.ssh/id_ecdsa"
+    echo "  ServerAliveInterval $SERVER_ALIVE_INTERVAL"
+    echo "  ServerAliveCountMax $SERVER_ALIVE_COUNT_MAX"
     echo "$END_MARKER"
   } >"$SSH_CONFIG"
 

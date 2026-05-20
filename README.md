@@ -84,6 +84,20 @@ If you are not the user that was identified, please run 'opkssh login'
 `ssh -J factory ...` still works because it uses SSH TCP forwarding rather than
 an interactive shell.
 
+The generated jump-host sshd policy also sets:
+
+```sshconfig
+ClientAliveInterval 30
+ClientAliveCountMax 20
+```
+
+The generated client config sets:
+
+```sshconfig
+ServerAliveInterval 20
+ServerAliveCountMax 6
+```
+
 To allow additional forwarding-only principals:
 
 ```sh

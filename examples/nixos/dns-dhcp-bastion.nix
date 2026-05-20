@@ -37,6 +37,8 @@
     jumpHost = {
       enable = true;
       users = [ "factory" ];
+      clientAliveInterval = 30;
+      clientAliveCountMax = 20;
       permitOpen = [
         "cnc-controller-01.livinglabs.internal:22"
         "robot-cell-02.livinglabs.internal:22"

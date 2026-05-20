@@ -43,6 +43,8 @@ FACTORY_ACCESS_GROUP="factory-ssh-access"
 INSTALL_NO_SHELL_COMMAND=true
 CREATE_FACTORY_USER=true
 CONFIGURE_SSHD_OPKSSH=true
+CLIENT_ALIVE_INTERVAL="30"
+CLIENT_ALIVE_COUNT_MAX="20"
 
 usage() {
   echo "${BOLD}Usage:${RESET} $0 [options]"
@@ -56,6 +58,8 @@ usage() {
   echo "  --no-create-factory-user   Do not create the shared bastion Unix user"
   echo "  --jump-principals LIST     Space/comma separated users allowed to forward (default: factory)"
   echo "  --permit-open LIST         PermitOpen value for jump users (default: any)"
+  echo "  --client-alive-interval N  Seconds between server keepalives for jump users (default: 30)"
+  echo "  --client-alive-count N     Missed keepalives before disconnect (default: 20)"
   echo "  --no-no-shell-command      Do not install ForceCommand no-shell message"
   echo "  --group-map FILE           Apply Entra group-to-Linux-user auth map"
   echo "  --role-map FILE            Apply OIDC role-to-Linux-user auth map"
@@ -102,6 +106,14 @@ while [[ $# -gt 0 ]]; do
     ;;
   --permit-open)
     PERMIT_OPEN="${2:-}"
+    shift 2
+    ;;
+  --client-alive-interval)
+    CLIENT_ALIVE_INTERVAL="${2:-}"
+    shift 2
+    ;;
+  --client-alive-count)
+    CLIENT_ALIVE_COUNT_MAX="${2:-}"
     shift 2
     ;;
   --no-no-shell-command)
@@ -390,6 +402,8 @@ Match User $NORMALIZED_PRINCIPALS
     SetEnv OPKSSH_IDENTIFIED_USER="$FACTORY_USER"
 $FORCE_COMMAND_LINE
     PermitOpen $PERMIT_OPEN
+    ClientAliveInterval $CLIENT_ALIVE_INTERVAL
+    ClientAliveCountMax $CLIENT_ALIVE_COUNT_MAX
 EOF
 
   chmod 644 "$SSHD_JUMP_CONFIG"
@@ -457,6 +471,7 @@ if [[ "$CONFIGURE_JUMP_HOST" == true ]]; then
   echo "  configured: $SSHD_JUMP_CONFIG"
   echo "  shared user: $FACTORY_USER"
   echo "  Entra access group: $FACTORY_ACCESS_GROUP"
+  echo "  keepalive: ClientAliveInterval=$CLIENT_ALIVE_INTERVAL ClientAliveCountMax=$CLIENT_ALIVE_COUNT_MAX"
 else
   echo "  not configured (use --configure-jump-host to enable ssh -J forwarding users)"
 fi

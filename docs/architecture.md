@@ -63,6 +63,8 @@ Keep jump access narrow:
 - set `AllowTcpForwarding yes` only for those principals,
 - disable TTY, X11, and agent forwarding for jump principals,
 - use `ForceCommand` so direct sessions receive a no-shell message,
+- keep `ClientAliveInterval` and `ClientAliveCountMax` inside the same
+  `Match User factory` block as the forwarding policy,
 - use `PermitOpen host:22` allowlists for sensitive VLANs,
 - use firewall rules so the bastion can only reach the internal hosts it should.
 

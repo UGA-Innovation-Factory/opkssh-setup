@@ -262,6 +262,18 @@ in
         default = true;
         description = "Create the shared factory Unix account.";
       };
+
+      clientAliveInterval = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 30;
+        description = "Seconds between server keepalives for jump users.";
+      };
+
+      clientAliveCountMax = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 20;
+        description = "Missed server keepalive responses before sshd disconnects jump users.";
+      };
     };
 
     internalNetwork = {
@@ -474,6 +486,8 @@ in
             SetEnv OPKSSH_IDENTIFIED_USER="${cfg.factoryUser}"
             ${lib.optionalString cfg.jumpHost.forceNoShell "ForceCommand ${factoryNoShellCommand}"}
             PermitOpen ${lib.concatStringsSep " " cfg.jumpHost.permitOpen}
+            ClientAliveInterval ${toString cfg.jumpHost.clientAliveInterval}
+            ClientAliveCountMax ${toString cfg.jumpHost.clientAliveCountMax}
       '';
     })
 

@@ -19,7 +19,9 @@ bastion can resolve and route to the subset they should expose.
 ## Files
 
 - `client_setup` writes the UGA OPKSSH client config and optional `~/.ssh/config`
-  entries for `ProxyJump`.
+  entries for `ProxyJump` (Linux/macOS bash script).
+- `client_setup.ps1` PowerShell version for Windows environments.
+- `client_setup.bat` Windows batch file launcher for the PowerShell script.
 - `server_setup` installs/configures OPKSSH on Linux servers, registers the UGA
   Entra issuer, optionally enables jump-host forwarding policy, and can apply
   authorization maps.
@@ -38,6 +40,8 @@ bastion can resolve and route to the subset they should expose.
 
 ## Client Setup
 
+### Linux and macOS
+
 ```sh
 ./client_setup
 opkssh login uga
@@ -55,6 +59,51 @@ To install a different internal host pattern in `~/.ssh/config`:
   --factory-user factory \
   --remote-user dev
 ```
+
+### Windows
+
+Using PowerShell:
+
+```powershell
+.\client_setup.ps1
+opkssh login uga
+ssh factory
+ssh -J factory dev@cnc-controller-01.lab
+```
+
+Or using Command Prompt:
+
+```cmd
+client_setup.bat
+opkssh login uga
+ssh factory
+ssh -J factory dev@cnc-controller-01.lab
+```
+
+To customize the configuration on Windows:
+
+```powershell
+.\client_setup.ps1 `
+  -FactoryHost factory.uga.edu `
+  -FactoryAlias factory `
+  -InternalPattern "*.livinglabs.internal" `
+  -FactoryUser factory `
+  -RemoteUser dev
+```
+
+Or use `-LinuxUser` to set both factory and internal usernames:
+
+```powershell
+.\client_setup.ps1 -LinuxUser jdoe
+```
+
+For help with all options:
+
+```powershell
+Get-Help .\client_setup.ps1 -Detailed
+```
+
+### Notes for All Platforms
 
 The generated SSH config uses OPKSSH's default generated key,
 `~/.ssh/id_ecdsa`, with `IdentitiesOnly yes`.

@@ -9,8 +9,13 @@ This guide provides Windows-specific instructions for setting up OPKSSH for UGA 
    - To check: `ssh -V` in PowerShell or Command Prompt
    - If not installed, enable via: Settings → Apps → Optional Features → OpenSSH Client
 3. **OPKSSH binary** for Windows
-   - Download from: https://github.com/openpubkey/opkssh
+   - The setup script will attempt to install it automatically using winget if not found
+   - Manual installation: Download from https://github.com/openpubkey/opkssh
    - Place `opkssh.exe` in your PATH (e.g., `C:\Program Files\opkssh\` or `C:\Users\<username>\bin\`)
+4. **winget (Windows Package Manager)** - Optional but recommended
+   - Included with Windows 11 and recent Windows 10 versions
+   - Used for automatic opkssh installation
+   - If not available: https://aka.ms/winget-install
 
 ## Running the Setup Script
 
@@ -115,9 +120,17 @@ If `ssh` is not recognized:
 
 ### OPKSSH Not Found
 
+The setup script will automatically attempt to install opkssh using winget if it's not found on your PATH.
+
+**If automatic installation succeeds:**
+- Restart your PowerShell/Command Prompt window to refresh the PATH
+- Run `opkssh login uga` to begin using it
+
+**If automatic installation fails or winget is not available:**
+
 Ensure `opkssh.exe` is in a directory listed in your PATH:
 
-1. Download opkssh from the official repository
+1. Download opkssh from the official repository: https://github.com/openpubkey/opkssh/releases
 2. Place it in a directory like `C:\Program Files\opkssh\`
 3. Add that directory to your PATH:
    - Settings → System → About → Advanced system settings
@@ -127,6 +140,12 @@ Ensure `opkssh.exe` is in a directory listed in your PATH:
 Or place it in an existing PATH directory like:
 - `C:\Windows\System32\` (requires admin rights)
 - `C:\Users\<username>\bin\` (create this directory and add it to your user PATH)
+
+**Installing winget:**
+
+If you don't have winget and want automatic installation support:
+- Download from: https://aka.ms/winget-install
+- Or install "App Installer" from Microsoft Store
 
 ### Permission Denied Errors
 

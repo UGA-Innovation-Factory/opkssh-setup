@@ -274,12 +274,69 @@ if ($opksshPath) {
 } else {
     Write-Warning "opkssh was not found on your PATH."
     
-    Write-Host ""
-    Write-Host "Install OPKSSH first:" -ForegroundColor Cyan
-    Write-Host "  https://github.com/openpubkey/opkssh"
-    Write-Host ""
-    Write-Host "After installing, open a new terminal and run:"
-    Write-Host "  opkssh login uga"
-    Write-Host ""
-    Write-Host "Config was still created successfully." -ForegroundColor Yellow
+    # Try to install with winget
+    $wingetPath = Get-Command winget -ErrorAction SilentlyContinue
+    
+    if ($wingetPath) {
+        Write-Info "Attempting to install opkssh using winget..."
+        
+        try {
+            # Search for opkssh package
+            $searchResult = winget search opkssh 2>&1
+            
+            if ($LASTEXITCODE -eq 0 -and $searchResult -match "opkssh") {
+                Write-Host "Found opkssh in winget repository. Installing..."
+                
+                # Install opkssh
+                winget install opkssh --accept-source-agreements --accept-package-agreements
+                
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "opkssh installed successfully!"
+                    Write-Host ""
+                    Write-Host "Please restart your terminal to refresh your PATH, then run:" -ForegroundColor Yellow
+                    Write-Host "  opkssh login uga"
+                    Write-Host ""
+                    Write-Host "Setup complete." -ForegroundColor Green
+                } else {
+                    Write-Warning "winget install command failed."
+                    Write-Host ""
+                    Write-Host "Install OPKSSH manually:" -ForegroundColor Cyan
+                    Write-Host "  https://github.com/openpubkey/opkssh"
+                    Write-Host ""
+                    Write-Host "Config was still created successfully." -ForegroundColor Yellow
+                }
+            } else {
+                Write-Warning "opkssh package not found in winget repository."
+                Write-Host ""
+                Write-Host "Install OPKSSH manually:" -ForegroundColor Cyan
+                Write-Host "  https://github.com/openpubkey/opkssh"
+                Write-Host ""
+                Write-Host "After installing, open a new terminal and run:"
+                Write-Host "  opkssh login uga"
+                Write-Host ""
+                Write-Host "Config was still created successfully." -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Warning "Failed to install opkssh via winget: $_"
+            Write-Host ""
+            Write-Host "Install OPKSSH manually:" -ForegroundColor Cyan
+            Write-Host "  https://github.com/openpubkey/opkssh"
+            Write-Host ""
+            Write-Host "Config was still created successfully." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Warning "winget is not available on this system."
+        Write-Host ""
+        Write-Host "Install OPKSSH manually:" -ForegroundColor Cyan
+        Write-Host "  https://github.com/openpubkey/opkssh"
+        Write-Host "  https://github.com/openpubkey/opkssh/releases"
+        Write-Host ""
+        Write-Host "Or install winget (Windows Package Manager) first:"
+        Write-Host "  https://aka.ms/winget-install"
+        Write-Host ""
+        Write-Host "After installing, open a new terminal and run:"
+        Write-Host "  opkssh login uga"
+        Write-Host ""
+        Write-Host "Config was still created successfully." -ForegroundColor Yellow
+    }
 }

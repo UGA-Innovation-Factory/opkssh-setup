@@ -71,6 +71,8 @@ ssh factory
 ssh -J factory dev@cnc-controller-01.lab
 ```
 
+The script will automatically attempt to install opkssh using winget if it's not found on your PATH.
+
 Or using Command Prompt:
 
 ```cmd

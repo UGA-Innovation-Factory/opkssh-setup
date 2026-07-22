@@ -17,6 +17,7 @@ CONFIG_DIR="$HOME/.opk"
 CONFIG_FILE="$CONFIG_DIR/config.yml"
 SSH_DIR="$HOME/.ssh"
 SSH_CONFIG="$SSH_DIR/config"
+SSH_KNOWN_HOSTS="$SSH_DIR/known_hosts"
 
 FACTORY_HOST="factory.uga.edu"
 FACTORY_ALIAS="factory"
@@ -24,6 +25,7 @@ INTERNAL_PATTERN="*.factory.internal"
 FACTORY_USER="factory"
 REMOTE_USER="${USER}"
 UPDATE_SSH_CONFIG=true
+TRUST_FACTORY_HOST=true
 SERVER_ALIVE_INTERVAL="20"
 SERVER_ALIVE_COUNT_MAX="6"
 
@@ -39,44 +41,67 @@ usage() {
   echo "  --linux-user USER         Set both factory and internal remote users"
   echo "  --server-alive-interval N Seconds between client keepalives (default: 20)"
   echo "  --server-alive-count N    Missed keepalives before disconnect (default: 6)"
-  echo "  --no-ssh-config          Only write OPKSSH config; skip ~/.ssh/config"
-  echo "  -h, --help               Show this help message"
+  echo "  --no-trust-factory-host   Do not add the factory host to ~/.ssh/known_hosts"
+  echo "  --no-ssh-config           Only write OPKSSH config; skip ~/.ssh/config"
+  echo "  -h, --help                Show this help message"
+}
+
+require_value() {
+  local option="$1"
+  local value="${2:-}"
+
+  if [[ -z "$value" ]]; then
+    err "$option requires a value"
+    exit 1
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
   --factory-host)
-    FACTORY_HOST="${2:-}"
+    require_value "$1" "${2:-}"
+    FACTORY_HOST="$2"
     shift 2
     ;;
   --factory-alias)
-    FACTORY_ALIAS="${2:-}"
+    require_value "$1" "${2:-}"
+    FACTORY_ALIAS="$2"
     shift 2
     ;;
   --factory-user)
-    FACTORY_USER="${2:-}"
+    require_value "$1" "${2:-}"
+    FACTORY_USER="$2"
     shift 2
     ;;
   --internal-pattern)
-    INTERNAL_PATTERN="${2:-}"
+    require_value "$1" "${2:-}"
+    INTERNAL_PATTERN="$2"
     shift 2
     ;;
   --remote-user)
-    REMOTE_USER="${2:-}"
+    require_value "$1" "${2:-}"
+    REMOTE_USER="$2"
     shift 2
     ;;
   --linux-user)
-    FACTORY_USER="${2:-}"
-    REMOTE_USER="${2:-}"
+    require_value "$1" "${2:-}"
+    FACTORY_USER="$2"
+    REMOTE_USER="$2"
     shift 2
     ;;
   --server-alive-interval)
-    SERVER_ALIVE_INTERVAL="${2:-}"
+    require_value "$1" "${2:-}"
+    SERVER_ALIVE_INTERVAL="$2"
     shift 2
     ;;
   --server-alive-count)
-    SERVER_ALIVE_COUNT_MAX="${2:-}"
+    require_value "$1" "${2:-}"
+    SERVER_ALIVE_COUNT_MAX="$2"
     shift 2
+    ;;
+  --no-trust-factory-host)
+    TRUST_FACTORY_HOST=false
+    shift
     ;;
   --no-ssh-config)
     UPDATE_SSH_CONFIG=false
@@ -128,16 +153,75 @@ YAML
 chmod 600 "$CONFIG_FILE"
 ok "Wrote config: $CONFIG_FILE"
 
-if [[ "$UPDATE_SSH_CONFIG" == true ]]; then
-  info "Configuring SSH ProxyJump entries"
+if [[ "$UPDATE_SSH_CONFIG" == true || "$TRUST_FACTORY_HOST" == true ]]; then
   mkdir -p "$SSH_DIR"
   chmod 700 "$SSH_DIR"
+fi
+
+if [[ "$TRUST_FACTORY_HOST" == true ]]; then
+  info "Adding $FACTORY_HOST to SSH known hosts"
+
+  if ! command -v ssh-keyscan >/dev/null 2>&1; then
+    err "ssh-keyscan was not found on PATH"
+    exit 1
+  fi
+
+  touch "$SSH_KNOWN_HOSTS"
+  chmod 600 "$SSH_KNOWN_HOSTS"
+
+  KNOWN_HOSTS_BACKUP="$SSH_KNOWN_HOSTS.backup.$(date +%Y%m%d-%H%M%S)"
+  cp "$SSH_KNOWN_HOSTS" "$KNOWN_HOSTS_BACKUP"
+
+  KEYSCAN_OUTPUT="$(mktemp)"
+  cleanup_keyscan() {
+    rm -f "$KEYSCAN_OUTPUT"
+  }
+  trap cleanup_keyscan EXIT
+
+  # Collect the host's currently advertised SSH host keys.
+  if ! ssh-keyscan \
+    -T 10 \
+    -H \
+    -t ed25519,ecdsa,rsa \
+    "$FACTORY_HOST" >"$KEYSCAN_OUTPUT" 2>/dev/null; then
+    err "Could not retrieve SSH host keys from $FACTORY_HOST"
+    exit 1
+  fi
+
+  if [[ ! -s "$KEYSCAN_OUTPUT" ]]; then
+    err "No SSH host keys were returned by $FACTORY_HOST"
+    exit 1
+  fi
+
+  # Remove any existing entry for this hostname before adding the current keys.
+  # ssh-keygen -R handles both plain and hashed known_hosts entries.
+  ssh-keygen \
+    -f "$SSH_KNOWN_HOSTS" \
+    -R "$FACTORY_HOST" >/dev/null 2>&1 || true
+
+  cat "$KEYSCAN_OUTPUT" >>"$SSH_KNOWN_HOSTS"
+  chmod 600 "$SSH_KNOWN_HOSTS"
+
+  rm -f "$KEYSCAN_OUTPUT"
+  trap - EXIT
+
+  ok "Trusted SSH host keys for: $FACTORY_HOST"
+  echo "     Backup: $KNOWN_HOSTS_BACKUP"
+fi
+
+if [[ "$UPDATE_SSH_CONFIG" == true ]]; then
+  info "Configuring SSH ProxyJump entries"
   touch "$SSH_CONFIG"
   chmod 600 "$SSH_CONFIG"
 
   START_MARKER="# >>> UGA Manufacturing Living Labs OPKSSH"
   END_MARKER="# <<< UGA Manufacturing Living Labs OPKSSH"
   TMP_CONFIG="$(mktemp)"
+
+  cleanup_ssh_config() {
+    rm -f "$TMP_CONFIG"
+  }
+  trap cleanup_ssh_config EXIT
 
   if grep -Fq "$START_MARKER" "$SSH_CONFIG"; then
     awk -v start="$START_MARKER" -v end="$END_MARKER" '
@@ -184,6 +268,8 @@ if [[ "$UPDATE_SSH_CONFIG" == true ]]; then
   } >"$SSH_CONFIG"
 
   rm -f "$TMP_CONFIG"
+  trap - EXIT
+
   ok "Updated SSH config: $SSH_CONFIG"
 fi
 

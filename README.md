@@ -20,8 +20,7 @@ bastion can resolve and route to the subset they should expose.
 
 - `client_setup` writes the UGA OPKSSH client config and optional `~/.ssh/config`
   entries for `ProxyJump` (Linux/macOS bash script).
-- `client_setup.ps1` PowerShell version for Windows environments.
-- `client_setup.bat` Windows batch file launcher for the PowerShell script.
+- `client_setup.bat` configures Windows clients without PowerShell or administrator access.
 - `server_setup` installs/configures OPKSSH on Linux servers, registers the UGA
   Entra issuer, optionally enables jump-host forwarding policy, and can apply
   authorization maps.
@@ -62,47 +61,35 @@ To install a different internal host pattern in `~/.ssh/config`:
 
 ### Windows
 
-Using PowerShell:
-
-```powershell
-.\client_setup.ps1
-opkssh login uga
-ssh factory
-ssh -J factory dev@cnc-controller-01.lab
-```
-
-The script will automatically attempt to install opkssh using winget if it's not found on your PATH.
-
-Or using Command Prompt:
+Open Command Prompt in the repository directory. Run:
 
 ```cmd
 client_setup.bat
-opkssh login uga
+"%LOCALAPPDATA%\opkssh\bin\opkssh.exe" login uga
 ssh factory
 ssh -J factory dev@cnc-controller-01.lab
 ```
 
-To customize the configuration on Windows:
+The script checks for winget before installation. It installs OPKSSH for the current user under `%LOCALAPPDATA%\opkssh\bin`.
 
-```powershell
-.\client_setup.ps1 `
-  -FactoryHost factory.uga.edu `
-  -FactoryAlias factory `
-  -InternalPattern "*.livinglabs.internal" `
-  -FactoryUser factory `
-  -RemoteUser dev
+The winget command accepts source and package agreements. This prevents first-use prompts from blocking setup.
+
+To customize the configuration:
+
+```cmd
+client_setup.bat --factory-host factory.uga.edu --factory-alias factory --internal-pattern "*.livinglabs.internal" --factory-user factory --remote-user dev
 ```
 
-Or use `-LinuxUser` to set both factory and internal usernames:
+Use `--linux-user` to set both remote user names:
 
-```powershell
-.\client_setup.ps1 -LinuxUser jdoe
+```cmd
+client_setup.bat --linux-user jdoe
 ```
 
 For help with all options:
 
-```powershell
-Get-Help .\client_setup.ps1 -Detailed
+```cmd
+client_setup.bat --help
 ```
 
 ### Notes for All Platforms

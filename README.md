@@ -41,6 +41,20 @@ bastion can resolve and route to the subset they should expose.
 
 ### Linux and macOS
 
+For a quick install with curl, run:
+
+```sh
+curl -fsSL "https://raw.githubusercontent.com/UGA-Innovation-Factory/opkssh-setup/main/client_setup" | bash
+```
+
+If wget is available, you can use it instead:
+
+```sh
+wget -qO- "https://raw.githubusercontent.com/UGA-Innovation-Factory/opkssh-setup/main/client_setup" | bash
+```
+
+For a repository checkout, run:
+
 ```sh
 ./client_setup
 opkssh login uga
@@ -61,7 +75,21 @@ To install a different internal host pattern in `~/.ssh/config`:
 
 ### Windows
 
-Open Command Prompt in the repository directory. Run:
+For a quick install with curl, open Command Prompt and run:
+
+```cmd
+curl.exe -fsSLo "%TEMP%\opkssh-client-setup.bat" "https://raw.githubusercontent.com/UGA-Innovation-Factory/opkssh-setup/main/client_setup.bat" && call "%TEMP%\opkssh-client-setup.bat"
+```
+
+If wget is available, you can use it instead:
+
+```cmd
+wget -qO "%TEMP%\opkssh-client-setup.bat" "https://raw.githubusercontent.com/UGA-Innovation-Factory/opkssh-setup/main/client_setup.bat" && call "%TEMP%\opkssh-client-setup.bat"
+```
+
+These commands save the setup file in the user temporary directory. They run the file only after the download succeeds.
+
+For a repository checkout, open Command Prompt in the repository directory. Run:
 
 ```cmd
 client_setup.bat
